@@ -30,3 +30,25 @@ Next steps
 - Integrate Secrets Manager for DB credentials
 - Add monitoring (CloudWatch alarms), backups and automatic snapshots for DB
 - Harden security groups (limit ALB access to required CIDRs)
+
+CI/CD with Jenkins
+
+This repo includes a Jenkins declarative pipeline (`Jenkinsfile`) to validate/plan/apply/destroy Terraform.
+
+Prereqs on Jenkins agent
+- Terraform CLI installed and on PATH
+- AWS credentials in Jenkins (Credentials > Kind: Amazon Web Services) with ID: `aws-terraform`
+- Secret Text credential for DB password with ID: `tf-db-password`
+
+Run the pipeline
+- Create a Pipeline job pointing at this repo and script path `Jenkinsfile`, or use Jenkins Job Builder with `jenkins/job.yaml`.
+- Parameters:
+	- `ACTION`: `plan`, `apply`, or `destroy`
+- Behavior:
+	- `plan`: runs `terraform init/validate/plan`, archives `plan.txt`
+	- `apply`: requires manual approval on main branch, applies previously generated `tfplan`
+	- `destroy`: requires manual approval on main branch, destroys the stack
+
+Jenkins Job Builder (optional)
+- File: `jenkins/job.yaml`
+- Assumes a Jenkins SSH credential ID `jenkins-github-ssh` to pull from `git@github.com:johnadams78/capstoneproject.git`.

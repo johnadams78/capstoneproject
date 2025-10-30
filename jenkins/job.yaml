@@ -1,0 +1,29 @@
+# Jenkins Job Builder YAML to create a multibranch pipeline or a simple pipeline job
+
+- job:
+    name: capstoneproject-terraform
+    description: "Terraform CI/CD for AWS 3-tier infra (from Jenkinsfile in repo)"
+    project-type: pipeline
+    concurrent: false
+    parameters:
+      - choice:
+          name: ACTION
+          description: Terraform action to perform
+          choices:
+            - plan
+            - apply
+            - destroy
+    properties:
+      - build-discarder:
+          days-to-keep: 14
+          num-to-keep: 25
+    definition: cpsScm
+    scm:
+      - git:
+          url: git@github.com:johnadams78/capstoneproject.git
+          branches:
+            - '*/main'
+          credentials-id: 'jenkins-github-ssh'
+          script-path: Jenkinsfile
+    triggers:
+      - pollscm: ''
