@@ -1177,17 +1177,28 @@ pipeline {
             echo "✅ Terraform configuration is valid"
             
             echo "🔍 Checking current infrastructure state..."
+            
+            # Use parameter values or defaults
+            DB_DEPLOY=${DEPLOY_DATABASE:-true}
+            WEB_DEPLOY=${DEPLOY_WEB:-true}
+            MON_DEPLOY=${DEPLOY_MONITORING:-true}
+            
+            echo "📊 Configuration:"
+            echo "   - Deploy Database: $DB_DEPLOY"
+            echo "   - Deploy Web: $WEB_DEPLOY"  
+            echo "   - Deploy Monitoring: $MON_DEPLOY"
+            
             terraform refresh -input=false \
-              -var "deploy_database=true" \
-              -var "deploy_web=true" \
-              -var "deploy_monitoring=true" \
+              -var "deploy_database=$DB_DEPLOY" \
+              -var "deploy_web=$WEB_DEPLOY" \
+              -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}"
             
             echo "📋 Creating destroy plan..."
             terraform plan -destroy \
-              -var "deploy_database=true" \
-              -var "deploy_web=true" \
-              -var "deploy_monitoring=true" \
+              -var "deploy_database=$DB_DEPLOY" \
+              -var "deploy_web=$WEB_DEPLOY" \
+              -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}" \
               -out=destroy-plan.tfplan \
               -detailed-exitcode
@@ -1202,7 +1213,7 @@ pipeline {
               echo "📊 No resources found to destroy"
               echo "✅ Infrastructure appears to be already clean"
             elif [ $DESTROY_PLAN_EXIT_CODE -eq 2 ]; then
-              echo "📊 Destroy plan created - resources found for destruction"
+              echo "📊 Destroy plan created successfully - resources found for destruction"
               
               echo "🔍 Resources to be destroyed:"
               terraform show -json destroy-plan.tfplan | jq -r '
@@ -1253,8 +1264,11 @@ pipeline {
             # Clean up destroy plan
             rm -f destroy-plan.tfplan
             
-            echo "✅ Destroy validation completed"
+            echo "✅ Destroy validation completed successfully"
             echo "⚠️ Review the resources listed above before confirming destruction"
+            
+            # Ensure script exits with success code
+            exit 0
           '''
         }
         script {
@@ -1272,6 +1286,7 @@ pipeline {
         }
       }
       steps {
+        echo "🔍 DEBUG: ACTION=${params.ACTION}, AUTO_APPROVE=${params.AUTO_APPROVE}, PLAN_VALIDATED=${env.PLAN_VALIDATED}"
         echo '⚠️ DESTRUCTION WARNING: This will permanently destroy all infrastructure!'
         echo '💰 This will stop all AWS charges for these resources'
         echo '📋 Review the destroy validation results above'
@@ -1289,6 +1304,7 @@ pipeline {
         }
       }
       steps {
+        echo "🔍 DEBUG: ACTION=${params.ACTION}, PLAN_VALIDATED=${env.PLAN_VALIDATED}"
         echo '💥 Destroying all infrastructure...'
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
@@ -1309,20 +1325,30 @@ pipeline {
               exit 1
             fi
             
+            # Use parameter values or defaults
+            DB_DEPLOY=${DEPLOY_DATABASE:-true}
+            WEB_DEPLOY=${DEPLOY_WEB:-true}
+            MON_DEPLOY=${DEPLOY_MONITORING:-true}
+            
+            echo "📊 Destroy Configuration:"
+            echo "   - Deploy Database: $DB_DEPLOY"
+            echo "   - Deploy Web: $WEB_DEPLOY"  
+            echo "   - Deploy Monitoring: $MON_DEPLOY"
+            
             # Refresh state to ensure we have latest information
             echo "🔄 Refreshing Terraform state..."
             terraform refresh -input=false \
-              -var "deploy_database=true" \
-              -var "deploy_web=true" \
-              -var "deploy_monitoring=true" \
+              -var "deploy_database=$DB_DEPLOY" \
+              -var "deploy_web=$WEB_DEPLOY" \
+              -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}"
             
             # Show what will be destroyed
             echo "📋 Final destroy plan:"
             terraform plan -destroy \
-              -var "deploy_database=true" \
-              -var "deploy_web=true" \
-              -var "deploy_monitoring=true" \
+              -var "deploy_database=$DB_DEPLOY" \
+              -var "deploy_web=$WEB_DEPLOY" \
+              -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}" \
               -no-color
             
@@ -1331,9 +1357,9 @@ pipeline {
             
             # Execute the destroy with proper error handling
             terraform destroy -input=false -auto-approve \
-              -var "deploy_database=true" \
-              -var "deploy_web=true" \
-              -var "deploy_monitoring=true" \
+              -var "deploy_database=$DB_DEPLOY" \
+              -var "deploy_web=$WEB_DEPLOY" \
+              -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}"
             
             DESTROY_EXIT_CODE=$?
