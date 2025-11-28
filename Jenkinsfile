@@ -440,13 +440,12 @@ pipeline {
             echo "🎯 DEPLOYMENT VERIFICATION COMPLETE"
             echo "==========================================="
             
-            # Final status check
-            terraform show -json | jq -r '.values.root_module.resources[] | select(.type != "data") | "\(.type): \(.name)"' | sort | uniq -c
+            # Final status check - Resource summary
+            echo "📊 Deployed Resources Summary:"
+            terraform show -json | jq -r '.values.root_module.resources[] | select(.type != "data") | "\\(.type): \\(.name)"' | sort | uniq -c
             
             echo "✅ All deployed resources verified successfully!"
             echo "🚀 Infrastructure is ready for use!"
-            fi
-            
             echo "✅ Infrastructure verification complete"
           '''
         }
