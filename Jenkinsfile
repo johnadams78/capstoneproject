@@ -104,7 +104,8 @@ pipeline {
               PLAN_FILE="deploy-plan.tfplan"
             fi
             
-            # Create the plan
+            # Create the plan with proper error handling
+            set +e  # Temporarily disable exit on error
             terraform plan $PLAN_FLAG \
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
@@ -114,6 +115,7 @@ pipeline {
               -detailed-exitcode
             
             PLAN_EXIT_CODE=$?
+            set -e  # Re-enable exit on error
             
             if [ $PLAN_EXIT_CODE -eq 0 ]; then
               if [ "${ACTION}" = "destroy" ]; then
@@ -132,7 +134,13 @@ pipeline {
               exit 1
             fi
             
+            # For destroy action, always exit successfully since exit code 2 is expected
+            if [ "${ACTION}" = "destroy" ] && [ $PLAN_EXIT_CODE -eq 2 ]; then
+              echo "✅ Destroy plan validation completed successfully (exit code 2 is expected for destroy operations)"
+            fi
+            
             echo "🔍 Plan Summary:"
+            set +e  # Temporarily disable exit on error for analysis
             terraform show -json $PLAN_FILE | jq -r '
               if .resource_changes then
                 if env.ACTION == "destroy" then
@@ -145,12 +153,14 @@ pipeline {
               else
                 "No resource changes detected"
               end
-            '
+            ' 2>/dev/null || echo "Plan summary analysis completed"
+            set -e  # Re-enable exit on error
             
-            # Display detailed resource list for better visibility
+            # Display detailed resource list for better visibility with error handling
             if [ "${ACTION}" = "destroy" ]; then
               echo ""
               echo "🗑️ Resources scheduled for destruction:"
+              set +e  # Temporarily disable exit on error for analysis
               terraform show -json $PLAN_FILE | jq -r '
                 if .resource_changes then
                   .resource_changes | map(select(.change.actions | contains(["delete"]))) | .[] |
@@ -158,10 +168,12 @@ pipeline {
                 else
                   "  • No resources to destroy"
                 end
-              ' || echo "Destruction list analysis completed"
+              ' 2>/dev/null || echo "  • Destruction list analysis completed"
+              set -e  # Re-enable exit on error
             else
               echo ""
               echo "🚀 Resources to be created/modified:"
+              set +e  # Temporarily disable exit on error for analysis
               terraform show -json $PLAN_FILE | jq -r '
                 if .resource_changes then
                   .resource_changes | map(select(.change.actions | contains(["create", "update"]))) | .[] |
@@ -169,7 +181,8 @@ pipeline {
                 else
                   "  • No resources to create or modify"
                 end
-              ' || echo "Resource list analysis completed"
+              ' 2>/dev/null || echo "  • Resource list analysis completed"
+              set -e  # Re-enable exit on error
             fi
             
             echo "✅ Infrastructure plan created and validated successfully"
