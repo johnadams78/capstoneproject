@@ -202,72 +202,65 @@ pipeline {
       steps {
         echo '🔍 Pre-deployment validation...'
         script {
-          // Set the validation flag at the start
-          env.PLAN_VALIDATED = 'false'
-          
-          try {
-            withCredentials([
-              [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
-              string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
-            ]) {
-              sh '''
-                echo "=========================================="
-                echo "PRE-DEPLOYMENT VALIDATION"
-                echo "=========================================="
-                
-                echo "🔍 Validating Terraform configuration..."
-                terraform validate
-                
-                if [ $? -ne 0 ]; then
-                  echo "❌ Terraform configuration validation failed!"
-                  exit 1
-                fi
-                
-                echo "✅ Terraform configuration is valid"
-                
-                echo "📋 Creating pre-deployment validation plan..."
-                
-                # Allow terraform plan to return exit code 2 (changes detected)
-                set +e
-                terraform plan \
-                  -var "deploy_database=${DEPLOY_DATABASE}" \
-                  -var "deploy_web=${DEPLOY_WEB}" \
-                  -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                  -var "db_master_password=${TF_DB_PASSWORD}" \
-                  -out=validation-plan.tfplan \
-                  -detailed-exitcode
-                
-                PLAN_EXIT=$?
-                set -e
-                
-                # Exit code 0 = no changes, 1 = error, 2 = changes detected
-                if [ $PLAN_EXIT -eq 1 ]; then
-                  echo "❌ Pre-deployment planning failed!"
-                  exit 1
-                elif [ $PLAN_EXIT -eq 0 ]; then
-                  echo "📊 No changes needed - infrastructure up to date"
-                elif [ $PLAN_EXIT -eq 2 ]; then
-                  echo "📊 Deployment plan validated - changes ready to apply"
-                fi
-                
-                # Clean up
-                rm -f validation-plan.tfplan
-                
-                echo "✅ Pre-deployment validation completed successfully!"
-              '''
-            }
-            
-            // If we reach here, validation succeeded
-            env.PLAN_VALIDATED = 'true'
-            echo "✅ Validation successful - deployment stages will proceed"
-            echo "DEBUG: env.PLAN_VALIDATED is now set to: '${env.PLAN_VALIDATED}'"
-            echo "DEBUG: Type check: ${env.PLAN_VALIDATED == 'true'}"
-            
-          } catch (Exception e) {
-            env.PLAN_VALIDATED = 'false'
-            echo "❌ Validation failed: ${e.message}"
-            error("Pre-deployment validation failed")
+          withCredentials([
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+            string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+          ]) {
+            sh '''
+              echo "=========================================="
+              echo "PRE-DEPLOYMENT VALIDATION"
+              echo "=========================================="
+              
+              echo "🔍 Validating Terraform configuration..."
+              terraform validate
+              
+              if [ $? -ne 0 ]; then
+                echo "❌ Terraform configuration validation failed!"
+                exit 1
+              fi
+              
+              echo "✅ Terraform configuration is valid"
+              
+              echo "📋 Creating pre-deployment validation plan..."
+              
+              # Allow terraform plan to return exit code 2 (changes detected)
+              set +e
+              terraform plan \
+                -var "deploy_database=${DEPLOY_DATABASE}" \
+                -var "deploy_web=${DEPLOY_WEB}" \
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                -var "db_master_password=${TF_DB_PASSWORD}" \
+                -out=validation-plan.tfplan \
+                -detailed-exitcode
+              
+              PLAN_EXIT=$?
+              set -e
+              
+              # Exit code 0 = no changes, 1 = error, 2 = changes detected
+              if [ $PLAN_EXIT -eq 1 ]; then
+                echo "❌ Pre-deployment planning failed!"
+                exit 1
+              elif [ $PLAN_EXIT -eq 0 ]; then
+                echo "📊 No changes needed - infrastructure up to date"
+              elif [ $PLAN_EXIT -eq 2 ]; then
+                echo "📊 Deployment plan validated - changes ready to apply"
+              fi
+              
+              # Clean up
+              rm -f validation-plan.tfplan
+              
+              echo "✅ Pre-deployment validation completed successfully!"
+            '''
           }
+          
+          // If we reach here, validation succeeded - set flag OUTSIDE the withCredentials block
+          env.PLAN_VALIDATED = 'true'
+          // Also create a file flag that can be checked by when conditions
+          sh 'touch .jenkins-validated'
+          echo "✅ Validation successful - deployment stages will proceed"
+          echo "DEBUG: env.PLAN_VALIDATED is now set to: '${env.PLAN_VALIDATED}'"
+          echo "DEBUG: Type check: ${env.PLAN_VALIDATED == 'true'}"
+          echo "DEBUG: Validation flag file created"
         }
       }
     }
@@ -277,7 +270,10 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { 
+            // Check if validation flag file exists
+            return fileExists('.jenkins-validated')
+          }
         }
       }
       steps {
@@ -396,7 +392,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -489,7 +485,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -598,7 +594,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -746,7 +742,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -912,7 +908,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -972,7 +968,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
@@ -1077,7 +1073,7 @@ pipeline {
         beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          expression { fileExists('.jenkins-validated') }
         }
       }
       steps {
