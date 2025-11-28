@@ -201,107 +201,71 @@ pipeline {
       }
       steps {
         echo '🔍 Pre-deployment validation...'
-        withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
-          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
-        ]) {
-          sh '''
-            echo "=========================================="
-            echo "PRE-DEPLOYMENT VALIDATION"
-            echo "=========================================="
-            
-            echo "🔍 Validating Terraform configuration..."
-            terraform validate
-            
-            if [ $? -ne 0 ]; then
-              echo "❌ Terraform configuration validation failed!"
-              echo "🚨 Cannot proceed with deployment - fix configuration errors first"
-              exit 1
-            fi
-            
-            echo "✅ Terraform configuration is valid"
-            
-            echo "📋 Creating pre-deployment validation plan..."
-            
-            # Allow terraform plan to return exit code 2 without failing the script
-            set +e
-            terraform plan \
-              -var "deploy_database=${DEPLOY_DATABASE}" \
-              -var "deploy_web=${DEPLOY_WEB}" \
-              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-              -var "db_master_password=${TF_DB_PASSWORD}" \
-              -out=validation-plan.tfplan \
-              -detailed-exitcode
-            
-            VALIDATION_EXIT_CODE=$?
-            set -e
-            
-            if [ $VALIDATION_EXIT_CODE -eq 1 ]; then
-              echo "❌ Pre-deployment planning failed!"
-              echo "🚨 Cannot proceed with deployment - fix planning errors first"
-              exit 1
-            elif [ $VALIDATION_EXIT_CODE -eq 0 ]; then
-              echo "📊 No changes needed - infrastructure appears to be up to date"
-              echo "⚠️ Proceeding with deployment verification..."
-            elif [ $VALIDATION_EXIT_CODE -eq 2 ]; then
-              echo "📊 Deployment plan validated - changes detected and ready to apply"
-            fi
-            
-            echo "🔍 Pre-deployment Plan Analysis:"
-            terraform show -json validation-plan.tfplan | jq -r '
-              if .resource_changes then
-                .resource_changes | group_by(.change.actions[0]) | map({
-                  action: .[0].change.actions[0],
-                  count: length,
-                  resources: map(.address)
-                }) | .[] | 
-                "Action: " + .action + " (" + (.count | tostring) + " resources)" +
-                "\n  " + (.resources | join("\n  "))
-              else
-                "No resource changes detected in validation plan"
-              end
-            ' || echo "Plan analysis completed"
-            
-            echo "🔍 Checking AWS credentials and permissions..."
-            
-            # Verify AWS access
-            AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-            AWS_REGION=$(aws configure get region || echo "us-east-1")
-            AWS_USER=$(aws sts get-caller-identity --query Arn --output text)
-            
-            echo "✅ AWS Access Verified:"
-            echo "   - Account: $AWS_ACCOUNT"
-            echo "   - Region: $AWS_REGION" 
-            echo "   - User/Role: $AWS_USER"
-            
-            # Check for existing resources that might conflict
-            echo "🔍 Checking for existing conflicting resources..."
-            
-            EXISTING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=capstoneproject-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
-            EXISTING_DB=$(aws rds describe-db-clusters --db-cluster-identifier "capstoneproject-cluster" --query 'DBClusters[0].DBClusterIdentifier' --output text 2>/dev/null || echo "None")
-            
-            if [ "$EXISTING_VPC" != "None" ] && [ "$EXISTING_VPC" != "null" ]; then
-              echo "⚠️ Found existing VPC: $EXISTING_VPC"
-              echo "   This may indicate partial infrastructure already exists"
-            fi
-            
-            if [ "$EXISTING_DB" != "None" ] && [ "$EXISTING_DB" != "null" ]; then
-              echo "⚠️ Found existing RDS cluster: $EXISTING_DB"
-              echo "   This may indicate partial infrastructure already exists"
-            fi
-            
-            # Clean up validation plan
-            rm -f validation-plan.tfplan
-            
-            echo "✅ Pre-deployment validation completed successfully!"
-            echo "🚀 Ready to proceed with sequential deployment stages"
-            
-            # Ensure clean exit
-            exit 0
-          '''
-        }
         script {
-          env.PLAN_VALIDATED = 'true'
+          // Set the validation flag at the start
+          env.PLAN_VALIDATED = 'false'
+          
+          try {
+            withCredentials([
+              [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+              string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+            ]) {
+              sh '''
+                echo "=========================================="
+                echo "PRE-DEPLOYMENT VALIDATION"
+                echo "=========================================="
+                
+                echo "🔍 Validating Terraform configuration..."
+                terraform validate
+                
+                if [ $? -ne 0 ]; then
+                  echo "❌ Terraform configuration validation failed!"
+                  exit 1
+                fi
+                
+                echo "✅ Terraform configuration is valid"
+                
+                echo "📋 Creating pre-deployment validation plan..."
+                
+                # Allow terraform plan to return exit code 2 (changes detected)
+                set +e
+                terraform plan \
+                  -var "deploy_database=${DEPLOY_DATABASE}" \
+                  -var "deploy_web=${DEPLOY_WEB}" \
+                  -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                  -var "db_master_password=${TF_DB_PASSWORD}" \
+                  -out=validation-plan.tfplan \
+                  -detailed-exitcode
+                
+                PLAN_EXIT=$?
+                set -e
+                
+                # Exit code 0 = no changes, 1 = error, 2 = changes detected
+                if [ $PLAN_EXIT -eq 1 ]; then
+                  echo "❌ Pre-deployment planning failed!"
+                  exit 1
+                elif [ $PLAN_EXIT -eq 0 ]; then
+                  echo "📊 No changes needed - infrastructure up to date"
+                elif [ $PLAN_EXIT -eq 2 ]; then
+                  echo "📊 Deployment plan validated - changes ready to apply"
+                fi
+                
+                # Clean up
+                rm -f validation-plan.tfplan
+                
+                echo "✅ Pre-deployment validation completed successfully!"
+              '''
+            }
+            
+            // If we reach here, validation succeeded
+            env.PLAN_VALIDATED = 'true'
+            echo "✅ Validation successful - deployment stages will proceed"
+            
+          } catch (Exception e) {
+            env.PLAN_VALIDATED = 'false'
+            echo "❌ Validation failed: ${e.message}"
+            error("Pre-deployment validation failed")
+          }
         }
       }
     }
