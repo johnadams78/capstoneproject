@@ -41,7 +41,7 @@ variable "web_max" {
 variable "web_instance_type" {
   description = "EC2 instance type for web servers (keep minimal CPU/mem)"
   type        = string
-  default     = "t3.micro"
+  default     = "t3.medium"
 }
 
 variable "instance_type" {
