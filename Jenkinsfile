@@ -696,8 +696,8 @@ pipeline {
               done
             fi
             
-            # Final verification
-            if [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
+            # Final verification - expect at least 1 healthy instance (matches min_size=1)
+            if [ "$HEALTHY_COUNT" -ge "1" ] && [ "$INSERVICE_COUNT" -ge "1" ] && [ ! -z "$WEB_URL" ]; then
               echo "✅ Web tier deployed and verified successfully!"
               echo "📊 Summary:"
               echo "   - Load Balancer: $ELB_NAME"

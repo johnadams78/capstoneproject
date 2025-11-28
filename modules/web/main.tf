@@ -396,7 +396,7 @@ $az = @file_get_contents('http://169.254.169.254/latest/meta-data/placement/avai
                 </div>
                 <div class="info-item">
                     <strong>Auto Scaling:</strong><br>
-                    <span class="status-connected">Active (2-3 instances)</span>
+                    <span class="status-connected">Active (1 instance)</span>
                 </div>
             </div>
         </div>
