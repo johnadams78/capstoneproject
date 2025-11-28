@@ -126,8 +126,39 @@ pipeline {
             [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
             string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
           ]) {
-            echo "=== Running Terraform Plan ==="
-            sh 'terraform plan -input=false -out=tfplan -var "db_master_password=${TF_DB_PASSWORD}" | tee plan.txt'
+            script {
+              echo ""
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║            TERRAFORM PLAN - INFRASTRUCTURE PREVIEW         ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo ""
+            }
+            
+            sh '''
+              echo "🔍 Analyzing infrastructure changes..."
+              echo ""
+              
+              terraform plan -input=false -out=tfplan -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | tee plan.txt | while IFS= read -r line; do
+                echo "$line"
+                
+                # Highlight module planning
+                if echo "$line" | grep -q "module.vpc"; then
+                  echo "  → 🌐 Planning VPC & Networking..."
+                fi
+                if echo "$line" | grep -q "module.iam"; then
+                  echo "  → 🔐 Planning IAM Roles..."
+                fi
+                if echo "$line" | grep -q "module.db"; then
+                  echo "  → 🗄️  Planning Database Tier..."
+                fi
+                if echo "$line" | grep -q "module.web"; then
+                  echo "  → 🖥️  Planning Web Tier..."
+                fi
+                if echo "$line" | grep -q "module.monitoring"; then
+                  echo "  → 📊 Planning Monitoring Tier..."
+                fi
+              done
+            '''
             
             echo ""
             echo "=== Plan Summary ==="
@@ -136,7 +167,36 @@ pipeline {
               grep -E "Plan:|No changes" plan.txt | tail -1 || true
               echo ""
               echo "🔍 Components in plan:"
-              grep -E "(module\\.(vpc|db|monitoring|web|web_simple))" plan.txt | grep -E "(will be created|will be updated|will be destroyed)" | head -30 || true
+              echo ""
+              
+              # Show VPC components
+              if grep -q "module.vpc" plan.txt; then
+                echo "  🌐 VPC & Networking:"
+                grep "module.vpc" plan.txt | grep -E "(will be created|will be updated|will be destroyed)" | head -5 | sed 's/^/    /'
+              fi
+              
+              # Show DB components
+              if grep -q "module.db" plan.txt; then
+                echo ""
+                echo "  🗄️  Database Tier:"
+                grep "module.db" plan.txt | grep -E "(will be created|will be updated|will be destroyed)" | head -5 | sed 's/^/    /'
+              fi
+              
+              # Show Web components
+              if grep -q "module.web" plan.txt; then
+                echo ""
+                echo "  🖥️  Web Tier:"
+                grep "module.web" plan.txt | grep -E "(will be created|will be updated|will be destroyed)" | head -5 | sed 's/^/    /'
+              fi
+              
+              # Show Monitoring components
+              if grep -q "module.monitoring" plan.txt; then
+                echo ""
+                echo "  📊 Monitoring Tier:"
+                grep "module.monitoring" plan.txt | grep -E "(will be created|will be updated|will be destroyed)" | head -5 | sed 's/^/    /'
+              fi
+              
+              echo ""
             '''
             
             archiveArtifacts artifacts: 'plan.txt', onlyIfSuccessful: true
@@ -191,9 +251,77 @@ pipeline {
           ]) {
             sh 'test -f tfplan || (echo "❌ tfplan not found; run Plan first" && exit 1)'
             
-            echo "=== Installing Infrastructure ==="
-            echo "⏱️  This may take 10-15 minutes for database deployment..."
-            sh 'terraform apply -input=false -auto-approve tfplan | tee apply.txt'
+            script {
+              echo ""
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║            DEPLOYING AWS INFRASTRUCTURE                    ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo ""
+              echo "📋 Deployment Plan:"
+              echo "   ├─ 1️⃣  VPC & Networking"
+              if (params.DEPLOY_DATABASE) {
+                echo "   ├─ 2️⃣  Database Tier (Aurora RDS)"
+              }
+              if (params.DEPLOY_WEB) {
+                echo "   ├─ 3️⃣  Web Tier (EC2 + Application)"
+              }
+              if (params.DEPLOY_MONITORING) {
+                echo "   └─ 4️⃣  Monitoring Tier (Grafana)"
+              }
+              echo ""
+              echo "⏱️  Estimated time: 10-15 minutes"
+              echo "════════════════════════════════════════════════════════════"
+              echo ""
+            }
+            
+            sh '''
+              echo "🚀 Starting Terraform Apply..."
+              echo ""
+              
+              # Run terraform apply with live output
+              terraform apply -input=false -auto-approve tfplan 2>&1 | tee apply.txt | while IFS= read -r line; do
+                echo "$line"
+                
+                # Show stage progress
+                if echo "$line" | grep -q "module.vpc"; then
+                  echo "  → 🌐 Deploying VPC & Networking..."
+                fi
+                if echo "$line" | grep -q "module.iam"; then
+                  echo "  → 🔐 Creating IAM Roles..."
+                fi
+                if echo "$line" | grep -q "module.db.*aws_rds_cluster.*Creating"; then
+                  echo "  → 🗄️  Creating Database Cluster (this takes ~5 minutes)..."
+                fi
+                if echo "$line" | grep -q "module.db.*aws_rds_cluster_instance.*Creating"; then
+                  echo "  → 💾 Launching Database Instance..."
+                fi
+                if echo "$line" | grep -q "module.web.*aws_instance.*Creating"; then
+                  echo "  → 🖥️  Launching Web Server..."
+                fi
+                if echo "$line" | grep -q "module.monitoring.*aws_instance.*Creating"; then
+                  echo "  → 📊 Launching Monitoring Server..."
+                fi
+                if echo "$line" | grep -q "module.vpc.*Creation complete"; then
+                  echo "  ✅ VPC & Networking Complete"
+                fi
+                if echo "$line" | grep -q "module.db.*Creation complete"; then
+                  echo "  ✅ Database Tier Complete"
+                fi
+                if echo "$line" | grep -q "module.web.*Creation complete"; then
+                  echo "  ✅ Web Tier Complete"
+                fi
+                if echo "$line" | grep -q "module.monitoring.*Creation complete"; then
+                  echo "  ✅ Monitoring Tier Complete"
+                fi
+                if echo "$line" | grep -q "Apply complete"; then
+                  echo ""
+                  echo "════════════════════════════════════════════════════════════"
+                  echo "✅ DEPLOYMENT SUCCESSFUL!"
+                  echo "════════════════════════════════════════════════════════════"
+                fi
+              done
+            '''
+            
             archiveArtifacts artifacts: 'apply.txt', onlyIfSuccessful: true
           }
         }
