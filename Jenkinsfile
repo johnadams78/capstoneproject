@@ -1383,16 +1383,18 @@ pipeline {
         allOf {
           expression { params.ACTION == 'destroy' }
           expression { params.AUTO_APPROVE == false }
-          expression { env.PLAN_VALIDATED == 'true' }
         }
       }
       steps {
-        echo "🔍 DEBUG: ACTION=${params.ACTION}, AUTO_APPROVE=${params.AUTO_APPROVE}, PLAN_VALIDATED=${env.PLAN_VALIDATED}"
+        echo "🔍 DEBUG: ACTION=${params.ACTION}, AUTO_APPROVE=${params.AUTO_APPROVE}"
         echo '⚠️ DESTRUCTION WARNING: This will permanently destroy all infrastructure!'
         echo '💰 This will stop all AWS charges for these resources'
         echo '📋 Review the destroy validation results above'
         timeout(time: 30, unit: 'MINUTES') {
           input message: '💥 Are you ABSOLUTELY SURE you want to DESTROY everything? This cannot be undone!', ok: 'Yes, Destroy All Infrastructure'
+        }
+        script {
+          env.DESTROY_CONFIRMED = 'true'
         }
       }
     }
@@ -1401,11 +1403,14 @@ pipeline {
       when { 
         allOf {
           expression { params.ACTION == 'destroy' }
-          expression { env.PLAN_VALIDATED == 'true' }
+          anyOf {
+            expression { params.AUTO_APPROVE == true }
+            expression { env.DESTROY_CONFIRMED == 'true' }
+          }
         }
       }
       steps {
-        echo "🔍 DEBUG: ACTION=${params.ACTION}, PLAN_VALIDATED=${env.PLAN_VALIDATED}"
+        echo "🔍 DEBUG: ACTION=${params.ACTION}, AUTO_APPROVE=${params.AUTO_APPROVE}, DESTROY_CONFIRMED=${env.DESTROY_CONFIRMED}"
         echo '💥 Destroying all infrastructure...'
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
