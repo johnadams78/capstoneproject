@@ -1012,9 +1012,9 @@ pipeline {
             # Check Web Tier
             if [ "${DEPLOY_WEB}" = "true" ]; then
               WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo "Not available")
-              ALB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo "Not available")
+              ELB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo "Not available")
               echo "🖥️ Web Application: $WEB_URL"
-              echo "⚖️ Load Balancer DNS: $ALB_DNS"
+              echo "⚖️ Load Balancer DNS: $ELB_DNS"
               
               # Test web application accessibility
               if [ "$WEB_URL" != "Not available" ] && [ "$WEB_URL" != "" ]; then
@@ -1074,9 +1074,13 @@ pipeline {
             echo "🎯 DEPLOYMENT VERIFICATION COMPLETE"
             echo "==========================================="
             
-            # Final status check - Resource summary
+            # Final status check - Resource summary (with error handling)
             echo "📊 Deployed Resources Summary:"
-            terraform show -json | jq -r '.values.root_module.resources[] | select(.type != "data") | "\\(.type): \\(.name)"' | sort | uniq -c
+            if command -v jq &> /dev/null; then
+              terraform show -json 2>/dev/null | jq -r '.values.root_module.resources[]? | select(.type != "data") | "\\(.type): \\(.name)"' 2>/dev/null | sort | uniq -c || echo "   Unable to generate resource summary"
+            else
+              echo "   (jq not available - skipping detailed resource list)"
+            fi
             
             echo "✅ All deployed resources verified successfully!"
             echo "🚀 Infrastructure is ready for use!"
@@ -1111,7 +1115,7 @@ pipeline {
             # Get all URLs and connection info
             VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo 'Not available')
             WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo 'Not available')
-            ALB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo 'Not available')
+            ELB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo 'Not available')
             MON_DASHBOARD=$(terraform output -raw monitoring_dashboard_url 2>/dev/null || echo 'Not available')
             GRAFANA_URL=$(terraform output -raw grafana_dashboard_url 2>/dev/null || echo 'Not available')
             MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo 'Not available')
@@ -1127,7 +1131,7 @@ pipeline {
               echo "🖥️  WEB APPLICATION:"
               echo "   ┌─────────────────────────────────────────────────────────────"
               echo "   │ 🌟 Car Dealership Application: $WEB_URL"
-              echo "   │ ⚖️  Load Balancer DNS:         $ALB_DNS"
+              echo "   │ ⚖️  Load Balancer DNS:         $ELB_DNS"
               echo "   └─────────────────────────────────────────────────────────────"
               
               # Test web application one final time
