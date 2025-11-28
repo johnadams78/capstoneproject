@@ -63,9 +63,21 @@ pipeline {
     }
     
     stage('Plan Infrastructure') {
-      when { expression { params.ACTION == 'plan' } }
+      when { 
+        expression { 
+          params.ACTION == 'plan' || params.ACTION == 'install' || params.ACTION == 'destroy' 
+        }
+      }
       steps {
-        echo '📋 Creating Terraform execution plan...'
+        script {
+          if (params.ACTION == 'plan') {
+            echo '📋 Creating Terraform execution plan...'
+          } else if (params.ACTION == 'install') {
+            echo '📋 Creating deployment execution plan...'
+          } else if (params.ACTION == 'destroy') {
+            echo '📋 Creating destruction execution plan...'
+          }
+        }
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
           string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
@@ -81,41 +93,89 @@ pipeline {
             
             echo "✅ Terraform configuration is valid"
             
-            echo "📋 Creating comprehensive Terraform plan..."
-            terraform plan \
+            # Determine plan type based on ACTION
+            if [ "${ACTION}" = "destroy" ]; then
+              echo "📋 Creating destruction plan..."
+              PLAN_FLAG="-destroy"
+              PLAN_FILE="destroy-plan.tfplan"
+            else
+              echo "📋 Creating deployment plan..."
+              PLAN_FLAG=""
+              PLAN_FILE="deploy-plan.tfplan"
+            fi
+            
+            # Create the plan
+            terraform plan $PLAN_FLAG \
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
               -var "db_master_password=${TF_DB_PASSWORD}" \
-              -out=tfplan \
+              -out=$PLAN_FILE \
               -detailed-exitcode
             
             PLAN_EXIT_CODE=$?
             
             if [ $PLAN_EXIT_CODE -eq 0 ]; then
-              echo "📊 No changes detected - infrastructure is up to date"
+              if [ "${ACTION}" = "destroy" ]; then
+                echo "📊 No resources found to destroy - infrastructure appears to be clean"
+              else
+                echo "📊 No changes detected - infrastructure is up to date"
+              fi
             elif [ $PLAN_EXIT_CODE -eq 2 ]; then
-              echo "📊 Changes detected - plan created successfully"
+              if [ "${ACTION}" = "destroy" ]; then
+                echo "📊 Destruction plan created - resources found for removal"
+              else
+                echo "📊 Deployment plan created - changes detected"
+              fi
             else
               echo "❌ Terraform plan failed with exit code: $PLAN_EXIT_CODE"
               exit 1
             fi
             
             echo "🔍 Plan Summary:"
-            terraform show -json tfplan | jq -r '
+            terraform show -json $PLAN_FILE | jq -r '
               if .resource_changes then
-                "Resources to be created: " + (.resource_changes | map(select(.change.actions | contains(["create"]))) | length | tostring) +
-                "\nResources to be modified: " + (.resource_changes | map(select(.change.actions | contains(["update"]))) | length | tostring) +
-                "\nResources to be destroyed: " + (.resource_changes | map(select(.change.actions | contains(["delete"]))) | length | tostring)
+                if env.ACTION == "destroy" then
+                  "Resources to be destroyed: " + (.resource_changes | map(select(.change.actions | contains(["delete"]))) | length | tostring)
+                else
+                  "Resources to be created: " + (.resource_changes | map(select(.change.actions | contains(["create"]))) | length | tostring) +
+                  "\nResources to be modified: " + (.resource_changes | map(select(.change.actions | contains(["update"]))) | length | tostring) +
+                  "\nResources to be destroyed: " + (.resource_changes | map(select(.change.actions | contains(["delete"]))) | length | tostring)
+                end
               else
                 "No resource changes detected"
               end
             '
             
+            # Display detailed resource list for better visibility
+            if [ "${ACTION}" = "destroy" ]; then
+              echo ""
+              echo "🗑️ Resources scheduled for destruction:"
+              terraform show -json $PLAN_FILE | jq -r '
+                if .resource_changes then
+                  .resource_changes | map(select(.change.actions | contains(["delete"]))) | .[] |
+                  "  • " + .type + "." + .name + " (" + .address + ")"
+                else
+                  "  • No resources to destroy"
+                end
+              ' || echo "Destruction list analysis completed"
+            else
+              echo ""
+              echo "🚀 Resources to be created/modified:"
+              terraform show -json $PLAN_FILE | jq -r '
+                if .resource_changes then
+                  .resource_changes | map(select(.change.actions | contains(["create", "update"]))) | .[] |
+                  "  • " + (.change.actions[0] | ascii_upcase) + ": " + .type + "." + .name + " (" + .address + ")"
+                else
+                  "  • No resources to create or modify"
+                end
+              ' || echo "Resource list analysis completed"
+            fi
+            
             echo "✅ Infrastructure plan created and validated successfully"
           '''
         }
-        archiveArtifacts artifacts: 'tfplan', allowEmptyArchive: true
+        archiveArtifacts artifacts: '*plan*.tfplan', allowEmptyArchive: true
         script {
           env.PLAN_VALIDATED = 'true'
         }
@@ -1442,7 +1502,7 @@ pipeline {
         try {
           sh '''
             echo "🧹 Cleaning up temporary files..."
-            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan validation-plan.tfplan destroy-plan.tfplan
+            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan validation-plan.tfplan destroy-plan.tfplan deploy-plan.tfplan tfplan
             echo "✅ Temporary files cleaned up"
           '''
         } catch (Exception e) {
