@@ -120,6 +120,7 @@ $id=@file_get_contents('http://169.254.169.254/latest/meta-data/instance-id');if
 <div class="cars"><?php foreach($filtered as $c):?><div class="card"><div class="img">🚗<span class="badge"><?=$c[4]?></span></div><div class="info"><h3><?=$c[2]?> <?=$c[0]?> <?=$c[1]?></h3><div class="specs"><span>⚡ <?=$c[7]?> HP</span><span>🔧 <?=$c[6]?></span><span>🎨 <?=$c[8]?></span><span>📦 <?=$c[5]?></span></div><div class="price">$<?=number_format($c[3])?></div><button class="view">View Details</button></div></div><?php endforeach;?></div>
 <footer class="footer"><h3>🔧 Infrastructure Status</h3><div class="fi"><span class="ok">✅ Instance: <?=$id?></span><span class="ok">✅ Zone: <?=$az?></span><span class="ok">✅ Cars: <?=count($cars)?></span></div></footer></div></body></html>
 PHP
+rm -f /var/www/html/index.html
 chown -R apache:apache /var/www/html && chmod -R 755 /var/www/html && systemctl restart httpd
 EOT
   )
