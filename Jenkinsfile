@@ -1017,6 +1017,139 @@ pipeline {
       }
     }
     
+    stage('🎉 Deployment Success - Access Information') {
+      when { 
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
+      }
+      steps {
+        echo '🎉 DEPLOYMENT SUCCESSFUL! Here are your access links...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo ""
+            echo "████████████████████████████████████████████████████████████████████"
+            echo "🎉                 DEPLOYMENT SUCCESSFUL!                       🎉"
+            echo "████████████████████████████████████████████████████████████████████"
+            echo ""
+            echo "🚀 Your Capstone Project Infrastructure is now LIVE!"
+            echo ""
+            
+            # Get all URLs and connection info
+            VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo 'Not available')
+            WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo 'Not available')
+            ALB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo 'Not available')
+            MON_DASHBOARD=$(terraform output -raw monitoring_dashboard_url 2>/dev/null || echo 'Not available')
+            GRAFANA_URL=$(terraform output -raw grafana_dashboard_url 2>/dev/null || echo 'Not available')
+            MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo 'Not available')
+            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo 'Not available')
+            DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo 'capstonedb')
+            
+            echo "🌐 NETWORK INFORMATION:"
+            echo "   └── VPC ID: $VPC_ID"
+            echo "   └── Region: $(aws configure get region || echo us-east-1)"
+            echo ""
+            
+            if [ "${DEPLOY_WEB}" = "true" ] && [ "$WEB_URL" != "Not available" ]; then
+              echo "🖥️  WEB APPLICATION:"
+              echo "   ┌─────────────────────────────────────────────────────────────"
+              echo "   │ 🌟 Car Dealership Application: $WEB_URL"
+              echo "   │ ⚖️  Load Balancer DNS:         $ALB_DNS"
+              echo "   └─────────────────────────────────────────────────────────────"
+              
+              # Test web application one final time
+              echo "   🔍 Testing accessibility..."
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$WEB_URL" --connect-timeout 15 || echo "000")
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "   ✅ Status: READY - Application is accessible!"
+              else
+                echo "   ⏳ Status: INITIALIZING (HTTP $HTTP_STATUS) - Try again in 2-3 minutes"
+              fi
+              echo ""
+            fi
+            
+            if [ "${DEPLOY_MONITORING}" = "true" ] && [ "$MON_DASHBOARD" != "Not available" ]; then
+              echo "📊 MONITORING & DASHBOARDS:"
+              echo "   ┌─────────────────────────────────────────────────────────────"
+              echo "   │ 📈 Monitoring Dashboard:  $MON_DASHBOARD"
+              echo "   │ 🔍 Grafana Dashboard:     $GRAFANA_URL"
+              echo "   │ 🖥️  Server IP:            $MON_IP"
+              echo "   │ 🔑 Grafana Login:         admin / grafana123"
+              echo "   └─────────────────────────────────────────────────────────────"
+              
+              # Test monitoring accessibility
+              echo "   🔍 Testing accessibility..."
+              MON_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MON_DASHBOARD" --connect-timeout 15 || echo "000")
+              GRAFANA_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$GRAFANA_URL" --connect-timeout 15 || echo "000")
+              
+              if [ "$MON_STATUS" = "200" ]; then
+                echo "   ✅ Monitoring Dashboard: READY"
+              else
+                echo "   ⏳ Monitoring Dashboard: INITIALIZING (HTTP $MON_STATUS)"
+              fi
+              
+              if [ "$GRAFANA_STATUS" = "200" ]; then
+                echo "   ✅ Grafana Dashboard: READY"
+              else
+                echo "   ⏳ Grafana Dashboard: INITIALIZING (HTTP $GRAFANA_STATUS)"
+              fi
+              echo ""
+            fi
+            
+            if [ "${DEPLOY_DATABASE}" = "true" ] && [ "$DB_ENDPOINT" != "Not available" ]; then
+              echo "🗄️  DATABASE CONNECTION:"
+              echo "   ┌─────────────────────────────────────────────────────────────"
+              echo "   │ 🔗 Endpoint:   $DB_ENDPOINT"
+              echo "   │ 📊 Database:   $DB_NAME"
+              echo "   │ 👤 Username:   admin"
+              echo "   │ 🔑 Password:   [Stored in Jenkins credentials: tf-db-password]"
+              echo "   │ 🚪 Port:       3306"
+              echo "   └─────────────────────────────────────────────────────────────"
+              
+              # Check database status
+              DB_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier capstoneproject-cluster --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "unknown")
+              echo "   ✅ Status: $DB_STATUS"
+              echo ""
+            fi
+            
+            echo "🔧 AWS RESOURCE INFORMATION:"
+            echo "   ├── Account ID: $(aws sts get-caller-identity --query Account --output text)"
+            echo "   ├── Region: $(aws configure get region || echo us-east-1)"
+            echo "   └── Deployment Time: $(date)"
+            echo ""
+            
+            echo "📱 QUICK ACCESS COMMANDS:"
+            echo "   ┌─────────────────────────────────────────────────────────────"
+            if [ "$WEB_URL" != "Not available" ]; then
+              echo "   │ Open Web App:     curl -I $WEB_URL"
+            fi
+            if [ "$MON_DASHBOARD" != "Not available" ]; then
+              echo "   │ Check Monitoring: curl -I $MON_DASHBOARD"
+            fi
+            if [ "$DB_ENDPOINT" != "Not available" ]; then
+              echo "   │ Test DB Connection: mysql -h $DB_ENDPOINT -u admin -p $DB_NAME"
+            fi
+            echo "   │ View Resources:   aws ec2 describe-instances --region $(aws configure get region || echo us-east-1)"
+            echo "   └─────────────────────────────────────────────────────────────"
+            echo ""
+            
+            echo "⚠️  IMPORTANT NOTES:"
+            echo "   • Save these URLs - they are your access points to the infrastructure"
+            echo "   • If services show 'INITIALIZING', wait 2-3 minutes for full startup"
+            echo "   • Database password is stored securely in Jenkins credentials"
+            echo "   • Use ACTION=destroy to remove all resources and stop AWS charges"
+            echo ""
+            
+            echo "🎊 CONGRATULATIONS! Your infrastructure deployment is complete!"
+            echo "████████████████████████████████████████████████████████████████████"
+          '''
+        }
+      }
+    }
+    
     stage('Validate Destroy Plan') {
       when { 
         expression { params.ACTION == 'destroy' }
