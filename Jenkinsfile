@@ -367,12 +367,12 @@ pipeline {
               echo "   - Internet Gateway: $IGW_ID"
               echo "   - NAT Gateways: $NAT_COUNT"
             else
-              echo "❌ VPC verification failed - initiating cleanup"
+              echo "❌ VPC verification failed"
               echo "Expected: 4+ subnets (2+ public, 2+ private), 1+ IGW, 1+ NAT"
               echo "Got: $SUBNET_COUNT subnets ($PUBLIC_SUBNETS public, $PRIVATE_SUBNETS private), IGW: $IGW_ID, NAT: $NAT_COUNT"
               
-              # Cleanup failed VPC resources
-              echo "🧹 Cleaning up failed VPC resources..."
+              # Cleanup ONLY the failed VPC resources (not destroying anything else)
+              echo "🧹 Cleaning up failed VPC resources only..."
               if [ ! -z "$VPC_ID" ] && [ "$VPC_ID" != "null" ]; then
                 terraform destroy -target=module.vpc -input=false -auto-approve \
                   -var "deploy_database=${DEPLOY_DATABASE}" \
@@ -466,12 +466,12 @@ pipeline {
               echo "Profile ARN: $PROFILE_ARN" 
               echo "Policies: $ATTACHED_POLICIES"
               
-              # Cleanup failed IAM resources
-              echo "🧹 Cleaning up failed IAM and VPC resources..."
-              terraform destroy -target=module.iam -target=module.vpc -input=false -auto-approve \
+              # Cleanup ONLY the failed IAM resources (keep VPC intact for retry)
+              echo "🧹 Cleaning up failed IAM resources only..."
+              terraform destroy -target=module.iam -input=false -auto-approve \
                 -var "deploy_database=${DEPLOY_DATABASE}" \
                 -var "deploy_web=${DEPLOY_WEB}" \
-                -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "IAM/VPC cleanup failed"
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "IAM cleanup failed"
               
               exit 1
             fi
@@ -574,13 +574,13 @@ pipeline {
               echo "Instance Status: $INSTANCE_STATUS"
               echo "Endpoint: $DB_ENDPOINT"
               
-              # Cleanup failed database and previous resources
-              echo "🧹 Cleaning up failed database and previous resources..."
-              terraform destroy -target=module.db -target=module.iam -target=module.vpc -input=false -auto-approve \
+              # Cleanup ONLY the failed database (keep VPC and IAM for retry)
+              echo "🧹 Cleaning up failed database resources only..."
+              terraform destroy -target=module.db -input=false -auto-approve \
                 -var "deploy_database=${DEPLOY_DATABASE}" \
                 -var "deploy_web=${DEPLOY_WEB}" \
                 -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Database/IAM/VPC cleanup failed"
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Database cleanup failed"
               
               exit 1
             fi
@@ -713,18 +713,26 @@ pipeline {
                 echo "   - HTTP Status: ⚠️ $HTTP_STATUS (May still be initializing)"
               fi
             else
-              echo "❌ Web tier verification failed - initiating cleanup"
+              echo "❌ Web tier verification failed"
               echo "Healthy Count: $HEALTHY_COUNT"
               echo "InService Count: $INSERVICE_COUNT"
               echo "Web URL: $WEB_URL"
               
-              # Cleanup failed web tier and previous resources
-              echo "🧹 Cleaning up failed web tier and previous resources..."
-              terraform destroy -target=module.web -target=module.db -target=module.iam -target=module.vpc -input=false -auto-approve \
+              # Cleanup ONLY the failed web tier (keep VPC, IAM, Database for retry)
+              echo "🧹 Cleaning up failed web tier resources only..."
+              terraform destroy -target=module.web -input=false -auto-approve \
                 -var "deploy_database=${DEPLOY_DATABASE}" \
                 -var "deploy_web=${DEPLOY_WEB}" \
                 -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Web/Database/IAM/VPC cleanup failed"
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Web tier cleanup failed"
+              
+              echo ""
+              echo "💡 Common issues:"
+              echo "   - Instances may still be launching (wait 2-3 minutes)"
+              echo "   - Health checks failing (check security groups)"
+              echo "   - vCPU limits reached (current limit: 8 vCPUs)"
+              echo "💡 VPC, IAM, and Database resources preserved for retry"
+              echo "💡 To retry: Re-run the Jenkins job with ACTION='install'"
               
               exit 1
             fi
@@ -871,26 +879,34 @@ pipeline {
                 echo "Status Check: $STATUS_CHECK"
                 echo "Monitoring IP: $MONITORING_IP"
                 
-                # Cleanup all resources on monitoring failure
-                echo "🧹 Cleaning up all deployed resources..."
-                terraform destroy -input=false -auto-approve \
+                # Cleanup ONLY the failed monitoring (keep other resources)
+                echo "🧹 Cleaning up failed monitoring resources only..."
+                terraform destroy -target=module.monitoring -input=false -auto-approve \
                   -var "deploy_database=${DEPLOY_DATABASE}" \
                   -var "deploy_web=${DEPLOY_WEB}" \
                   -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                  -var "db_master_password=${TF_DB_PASSWORD}" || echo "Full cleanup failed"
+                  -var "db_master_password=${TF_DB_PASSWORD}" || echo "Monitoring cleanup failed"
+                
+                echo ""
+                echo "💡 VPC, IAM, Database, and Web tier preserved for retry"
+                echo "💡 To retry: Re-run the Jenkins job with ACTION='install'"
                 
                 exit 1
               fi
             else
-              echo "❌ Monitoring verification failed - instance not found, initiating cleanup"
+              echo "❌ Monitoring verification failed - instance not found"
               
-              # Cleanup all resources on monitoring failure
-              echo "🧹 Cleaning up all deployed resources..."
-              terraform destroy -input=false -auto-approve \
+              # Cleanup ONLY the failed monitoring (keep other resources)
+              echo "🧹 Cleaning up failed monitoring resources only..."
+              terraform destroy -target=module.monitoring -input=false -auto-approve \
                 -var "deploy_database=${DEPLOY_DATABASE}" \
                 -var "deploy_web=${DEPLOY_WEB}" \
                 -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Full cleanup failed"
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Monitoring cleanup failed"
+              
+              echo ""
+              echo "💡 VPC, IAM, Database, and Web tier preserved for retry"
+              echo "💡 To retry: Re-run the Jenkins job with ACTION='install'"
               
               exit 1
             fi
