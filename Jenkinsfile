@@ -279,65 +279,120 @@ pipeline {
             }
             
             sh '''
-              echo "🚀 Starting Terraform Apply..."
+              echo "🚀 Starting Sequential Terraform Deployment..."
               echo ""
               
-              # Progress tracking variables
-              VPC_DONE=0
-              IAM_DONE=0
-              DB_DONE=0
-              WEB_DONE=0
-              MON_DONE=0
+              # TIER 1: VPC & Networking (REQUIRED - Foundation for everything)
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  TIER 1: VPC & NETWORKING                                  ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → 🌐 \033[32m██░░░░░░░░\033[0m Creating VPC, Subnets, Internet Gateway..."
               
-              # Run terraform apply with live output
-              terraform apply -input=false -auto-approve tfplan 2>&1 | tee apply.txt | while IFS= read -r line; do
-                echo "$line"
+              terraform apply -input=false -auto-approve \
+                -target=module.vpc \
+                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
+              
+              if [ $? -ne 0 ]; then
+                echo "❌ VPC deployment failed!"
+                exit 1
+              fi
+              echo "  ✅ \033[32m██████████\033[0m VPC & Networking Complete"
+              echo ""
+              sleep 2
+              
+              # TIER 2: IAM Roles (Needed before EC2 instances)
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  TIER 2: IAM ROLES & POLICIES                              ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → 🔐 \033[32m██░░░░░░░░\033[0m Creating IAM instance profiles..."
+              
+              terraform apply -input=false -auto-approve \
+                -target=module.iam \
+                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
+              
+              if [ $? -ne 0 ]; then
+                echo "❌ IAM deployment failed!"
+                exit 1
+              fi
+              echo "  ✅ \033[32m██████████\033[0m IAM Roles Complete"
+              echo ""
+              sleep 2
+              
+              # TIER 3: Database (if enabled)
+              if [ "$DEPLOY_DATABASE" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 3: DATABASE (Aurora RDS)                             ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → 🗄️  \033[32m███░░░░░░░\033[0m Creating Aurora cluster... (⏱️  ~5 mins)"
                 
-                # Show stage progress with green bars
-                if echo "$line" | grep -q "module.vpc"; then
-                  if [ $VPC_DONE -eq 0 ]; then
-                    echo "  → 🌐 \033[32m████░░░░░░\033[0m Deploying VPC & Networking..."
-                    VPC_DONE=1
-                  fi
-                fi
-                if echo "$line" | grep -q "module.iam"; then
-                  if [ $IAM_DONE -eq 0 ]; then
-                    echo "  → 🔐 \033[32m███░░░░░░░\033[0m Creating IAM Roles..."
-                    IAM_DONE=1
-                  fi
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster.*Creating"; then
-                  echo "  → 🗄️  \033[32m██████░░░░\033[0m Creating Database Cluster (this takes ~5 minutes)..."
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster_instance.*Creating"; then
-                  echo "  → 💾 \033[32m███████░░░\033[0m Launching Database Instance..."
-                fi
-                if echo "$line" | grep -q "module.web.*aws_instance.*Creating"; then
-                  echo "  → 🖥️  \033[32m████░░░░░░\033[0m Launching Web Server..."
-                fi
-                if echo "$line" | grep -q "module.monitoring.*aws_instance.*Creating"; then
-                  echo "  → 📊 \033[32m████░░░░░░\033[0m Launching Monitoring Server..."
-                fi
+                terraform apply -input=false -auto-approve \
+                  -target=module.db \
+                  tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
                 
-                # Completion with full green bars
-                if echo "$line" | grep -q "module.vpc.*Creation complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m VPC & Networking Complete"
+                if [ $? -ne 0 ]; then
+                  echo "❌ Database deployment failed!"
+                  exit 1
                 fi
-                if echo "$line" | grep -q "module.iam.*Creation complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m IAM Roles Complete"
+                echo "  ✅ \033[32m██████████\033[0m Database Tier Complete"
+                echo ""
+                sleep 2
+              fi
+              
+              # TIER 4: Web Tier (if enabled)
+              if [ "$DEPLOY_WEB" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 4: WEB TIER (EC2 Instances)                         ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → �️  \033[32m████░░░░░░\033[0m Launching web servers..."
+                
+                terraform apply -input=false -auto-approve \
+                  -target=module.web \
+                  tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
+                
+                if [ $? -ne 0 ]; then
+                  echo "❌ Web tier deployment failed!"
+                  exit 1
                 fi
-                if echo "$line" | grep -q "module.db.*Creation complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Database Tier Complete"
+                echo "  ✅ \033[32m██████████\033[0m Web Tier Complete"
+                echo ""
+                sleep 2
+              fi
+              
+              # TIER 5: Monitoring (if enabled)
+              if [ "$DEPLOY_MONITORING" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 5: MONITORING (Grafana)                              ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → 📊 \033[32m████░░░░░░\033[0m Deploying monitoring stack..."
+                
+                terraform apply -input=false -auto-approve \
+                  -target=module.monitoring \
+                  tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
+                
+                if [ $? -ne 0 ]; then
+                  echo "❌ Monitoring deployment failed!"
+                  exit 1
                 fi
-                if echo "$line" | grep -q "module.web.*Creation complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Web Tier Complete"
-                fi
-                if echo "$line" | grep -q "module.monitoring.*Creation complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Monitoring Tier Complete"
-                fi
-                if echo "$line" | grep -q "Apply complete"; then
-                  echo ""
-                  echo "════════════════════════════════════════════════════════════"
+                echo "  ✅ \033[32m██████████\033[0m Monitoring Tier Complete"
+                echo ""
+                sleep 2
+              fi
+              
+              # FINAL: Apply any remaining resources
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  FINAL: Applying remaining resources...                    ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → ⚙️  \033[32m█████░░░░░\033[0m Finalizing deployment..."
+              
+              terraform apply -input=false -auto-approve tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
+              
+              if [ $? -ne 0 ]; then
+                echo "❌ Final deployment step failed!"
+                exit 1
+              fi
+              
+              echo ""
+              echo "════════════════════════════════════════════════════════════"
                   echo "✅ \033[32m██████████\033[0m DEPLOYMENT SUCCESSFUL!"
                   echo "════════════════════════════════════════════════════════════"
                 fi
@@ -585,68 +640,98 @@ pipeline {
             }
             
             sh '''
-              echo "💥 Starting Terraform Destroy..."
+              echo "💥 Starting Sequential Terraform Destruction..."
               echo ""
               
-              # Run terraform destroy with live output and progress bars
-              terraform destroy -input=false -auto-approve -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | tee destroy.txt | while IFS= read -r line; do
-                echo "$line"
+              # TIER 1: Monitoring (destroy first - no dependencies)
+              if [ "$DEPLOY_MONITORING" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 1: DESTROYING MONITORING                             ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → 📊 \033[32m████░░░░░░\033[0m Terminating monitoring server..."
                 
-                # Show destruction progress with green bars
-                if echo "$line" | grep -q "module.monitoring.*aws_instance.*Destroying"; then
-                  echo "  → 📊 \033[32m████░░░░░░\033[0m Terminating Monitoring Server..."
-                fi
-                if echo "$line" | grep -q "module.web.*aws_instance.*Destroying"; then
-                  echo "  → 🖥️  \033[32m████░░░░░░\033[0m Terminating Web Server..."
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster_instance.*Destroying"; then
-                  echo "  → 💾 \033[32m███████░░░\033[0m Deleting Database Instance..."
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster.*Destroying"; then
-                  echo "  → 🗄️  \033[32m████████░░\033[0m Deleting Database Cluster (this takes ~5-10 minutes)..."
-                fi
-                if echo "$line" | grep -q "module.vpc.*aws_nat_gateway.*Destroying"; then
-                  echo "  → 🌐 \033[32m██████░░░░\033[0m Removing NAT Gateway..."
-                fi
-                if echo "$line" | grep -q "module.vpc.*aws_subnet.*Destroying"; then
-                  echo "  → 🔗 \033[32m█████░░░░░\033[0m Removing Subnets..."
-                fi
-                if echo "$line" | grep -q "module.vpc.*aws_internet_gateway.*Destroying"; then
-                  echo "  → 🌍 \033[32m████░░░░░░\033[0m Removing Internet Gateway..."
-                fi
-                if echo "$line" | grep -q "module.vpc.*aws_vpc.*Destroying"; then
-                  echo "  → 🏗️  \033[32m███░░░░░░░\033[0m Removing VPC..."
-                fi
-                if echo "$line" | grep -q "module.iam.*Destroying"; then
-                  echo "  → 🔐 \033[32m███░░░░░░░\033[0m Removing IAM Roles..."
-                fi
+                terraform destroy -input=false -auto-approve \
+                  -target=module.monitoring \
+                  -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
                 
-                # Show completion markers with full green bars
-                if echo "$line" | grep -q "module.monitoring.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Monitoring Tier Destroyed"
-                fi
-                if echo "$line" | grep -q "module.web.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Web Tier Destroyed"
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster_instance.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Database Instance Destroyed"
-                fi
-                if echo "$line" | grep -q "module.db.*aws_rds_cluster.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m Database Cluster Destroyed"
-                fi
-                if echo "$line" | grep -q "module.iam.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m IAM Roles Destroyed"
-                fi
-                if echo "$line" | grep -q "module.vpc.*aws_vpc.*Destruction complete"; then
-                  echo "  ✅ \033[32m██████████\033[0m VPC Destroyed"
-                fi
-                if echo "$line" | grep -q "Destroy complete"; then
-                  echo ""
-                  echo "════════════════════════════════════════════════════════════"
-                  echo "✅ \033[32m██████████\033[0m ALL INFRASTRUCTURE DESTROYED SUCCESSFULLY!"
-                  echo "════════════════════════════════════════════════════════════"
-                fi
-              done
+                echo "  ✅ \033[32m██████████\033[0m Monitoring Tier Destroyed"
+                echo ""
+                sleep 2
+              fi
+              
+              # TIER 2: Web Tier (destroy before database)
+              if [ "$DEPLOY_WEB" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 2: DESTROYING WEB TIER                               ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → 🖥️  \033[32m████░░░░░░\033[0m Terminating web servers..."
+                
+                terraform destroy -input=false -auto-approve \
+                  -target=module.web \
+                  -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
+                
+                echo "  ✅ \033[32m██████████\033[0m Web Tier Destroyed"
+                echo ""
+                sleep 2
+              fi
+              
+              # TIER 3: Database (slowest - takes 5-10 minutes)
+              if [ "$DEPLOY_DATABASE" = "true" ]; then
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  TIER 3: DESTROYING DATABASE (⏱️  ~5-10 mins)              ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo "  → �️  \033[32m██████░░░░\033[0m Deleting Aurora cluster..."
+                
+                terraform destroy -input=false -auto-approve \
+                  -target=module.db \
+                  -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
+                
+                echo "  ✅ \033[32m██████████\033[0m Database Tier Destroyed"
+                echo ""
+                sleep 2
+              fi
+              
+              # TIER 4: IAM Roles
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  TIER 4: DESTROYING IAM ROLES                              ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → 🔐 \033[32m███░░░░░░░\033[0m Removing IAM roles..."
+              
+              terraform destroy -input=false -auto-approve \
+                -target=module.iam \
+                -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
+              
+              echo "  ✅ \033[32m██████████\033[0m IAM Roles Destroyed"
+              echo ""
+              sleep 2
+              
+              # TIER 5: VPC & Networking (destroy last)
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  TIER 5: DESTROYING VPC & NETWORKING                       ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → 🌐 \033[32m██░░░░░░░░\033[0m Removing NAT Gateway..."
+              
+              terraform destroy -input=false -auto-approve \
+                -target=module.vpc \
+                -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
+              
+              echo "  ✅ \033[32m██████████\033[0m VPC & Networking Destroyed"
+              echo ""
+              sleep 2
+              
+              # FINAL: Destroy any remaining resources
+              echo "╔════════════════════════════════════════════════════════════╗"
+              echo "║  FINAL: Cleaning up remaining resources...                 ║"
+              echo "╚════════════════════════════════════════════════════════════╝"
+              echo "  → ⚙️  \033[32m█████░░░░░\033[0m Finalizing destruction..."
+              
+              terraform destroy -input=false -auto-approve \
+                -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | grep -E "(Destroying|Destruction complete|Destroy complete|Error)" || true
+              
+              echo ""
+              echo "════════════════════════════════════════════════════════════"
+              echo "✅ \033[32m██████████\033[0m ALL INFRASTRUCTURE DESTROYED SUCCESSFULLY!"
+              echo "════════════════════════════════════════════════════════════"
             '''
             
             archiveArtifacts artifacts: 'destroy.txt', allowEmptyArchive: true
