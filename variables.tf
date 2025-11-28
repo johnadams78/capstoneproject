@@ -78,3 +78,29 @@ variable "db_master_password" {
   default     = "ChangeMe123!"
   sensitive   = true
 }
+
+# Conditional deployment variables
+variable "deploy_database" {
+  description = "Whether to deploy the database tier"
+  type        = bool
+  default     = true
+}
+
+variable "deploy_web" {
+  description = "Whether to deploy the web tier"
+  type        = bool
+  default     = true
+}
+
+variable "deploy_monitoring" {
+  description = "Whether to deploy the monitoring tier"
+  type        = bool
+  default     = true
+}
+
+# EC2 Key Pair
+variable "key_name" {
+  description = "AWS EC2 Key Pair name for SSH access"
+  type        = string
+  default     = ""
+}

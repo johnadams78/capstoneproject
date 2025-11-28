@@ -101,10 +101,7 @@ pipeline {
 
     stage('Plan') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'plan' || params.ACTION == 'install' }
-        } 
+        expression { params.ACTION == 'plan' || params.ACTION == 'install' }
       }
       steps {
         dir(env.PROJECT_DIR) {
@@ -186,10 +183,7 @@ pipeline {
 
     stage('🌐 Deploy VPC & Networking') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'install' } 
-        } 
+        expression { params.ACTION == 'install' } 
       }
       steps {
         dir(env.PROJECT_DIR) {
@@ -234,10 +228,7 @@ pipeline {
 
     stage('🔐 Deploy IAM Roles') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'install' } 
-        } 
+        expression { params.ACTION == 'install' } 
       }
       steps {
         dir(env.PROJECT_DIR) {
@@ -279,7 +270,6 @@ pipeline {
     stage('🗄️ Deploy Database') {
       when { 
         allOf { 
-          branch 'main'
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_DATABASE == true }
         } 
@@ -328,7 +318,6 @@ pipeline {
     stage('🖥️ Deploy Web Tier') {
       when { 
         allOf { 
-          branch 'main'
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_WEB == true }
         } 
@@ -377,7 +366,6 @@ pipeline {
     stage('📊 Deploy Monitoring') {
       when { 
         allOf { 
-          branch 'main'
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_MONITORING == true }
         } 
@@ -424,10 +412,7 @@ pipeline {
 
     stage('⚙️ Finalize Deployment') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'install' } 
-        } 
+        expression { params.ACTION == 'install' } 
       }
       steps {
         dir(env.PROJECT_DIR) {
@@ -469,10 +454,7 @@ pipeline {
 
     stage('✅ Verify Infrastructure') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'install' } 
-        } 
+        expression { params.ACTION == 'install' } 
       }
       steps {
         dir(env.PROJECT_DIR) {
@@ -543,7 +525,6 @@ pipeline {
     stage('⚠️ Destroy (Confirm)') {
       when { 
         allOf { 
-          branch 'main'
           expression { params.ACTION == 'destroy' }
           expression { params.AUTO_APPROVE == false }
         } 
@@ -567,10 +548,7 @@ pipeline {
 
     stage('💥 Destroy All') {
       when { 
-        allOf { 
-          branch 'main'
-          expression { params.ACTION == 'destroy' } 
-        } 
+        expression { params.ACTION == 'destroy' } 
       }
       steps {
         dir(env.PROJECT_DIR) {
