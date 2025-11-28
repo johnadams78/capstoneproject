@@ -100,7 +100,7 @@ systemctl start httpd
 systemctl enable httpd
 
 # Create simple test page first to pass health checks
-echo "<html><body><h1>AutoMax Car Dealership</h1><p>Loading...</p></body></html>" > /var/www/html/index.html
+echo "<html><body><h1>Capstone Project</h1><p>Loading...</p></body></html>" > /var/www/html/index.html
 
 # Create car dealership website with 20 cars and filters
 cat > /var/www/html/index.php <<'PHPCODE'
@@ -179,7 +179,7 @@ $az = @file_get_contents('http://169.254.169.254/latest/meta-data/placement/avai
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoMax Premier - Luxury Car Dealership</title>
+    <title>Capstone Project - Luxury Car Dealership</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', system-ui, sans-serif; background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); color: #fff; min-height: 100vh; }
@@ -225,7 +225,7 @@ $az = @file_get_contents('http://169.254.169.254/latest/meta-data/placement/avai
 <body>
     <div class="container">
         <header>
-            <div class="logo">🚗 AutoMax Premier</div>
+            <div class="logo">🚗 Capstone Project</div>
             <nav class="nav">
                 <a href="#inventory">Inventory</a>
                 <a href="#financing">Financing</a>
