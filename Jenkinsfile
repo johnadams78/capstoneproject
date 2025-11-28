@@ -610,7 +610,7 @@ pipeline {
             echo "🚀 Creating Web Tier infrastructure..."
             echo "- Application Load Balancer"
             echo "- Auto Scaling Group (2-3 instances)"
-            echo "- Launch Template (t3.micro)"
+            echo "- Launch Template (t2.nano)"
             echo "- Target Groups"
             echo "- Security Groups"
             echo "- Car Dealership Application"
@@ -752,7 +752,7 @@ pipeline {
             echo "=========================================="
             
             echo "🚀 Creating Monitoring infrastructure..."
-            echo "- EC2 Instance (t3.micro)"
+            echo "- EC2 Instance (t2.nano)"
             echo "- Monitoring Dashboard (PHP/SQLite)"
             echo "- Grafana Server (Port 3000)"
             echo "- Security Groups"
