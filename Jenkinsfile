@@ -40,6 +40,9 @@ pipeline {
     AWS_DEFAULT_REGION = "${env.AWS_DEFAULT_REGION ?: 'us-east-1'}"
     PROJECT_DIR = '.'
     PROJECT_NAME = 'capstoneproject'
+    AWS_CREDENTIALS = credentials('aws-credentials')
+    AWS_ACCESS_KEY_ID = "${AWS_CREDENTIALS_USR}"
+    AWS_SECRET_ACCESS_KEY = "${AWS_CREDENTIALS_PSW}"
   }
 
   stages {
