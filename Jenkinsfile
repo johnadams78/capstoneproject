@@ -83,7 +83,9 @@ pipeline {
     }
     
     stage('Deploy VPC') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo "🌐 Deploying VPC and Networking..."
         echo "DEBUG: ACTION parameter value: ${params.ACTION}"
@@ -184,7 +186,9 @@ pipeline {
     }
     
     stage('Deploy IAM') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '🔐 Deploying IAM Roles and Policies...'
         withCredentials([
@@ -263,7 +267,9 @@ pipeline {
     }
     
     stage('Deploy Database') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '🗄️ Deploying Aurora RDS Database (this takes ~5-7 minutes)...'
         withCredentials([
@@ -357,7 +363,9 @@ pipeline {
     }
     
     stage('Deploy Web Tier') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '🖥️ Deploying Web Servers and Application...'
         withCredentials([
@@ -490,7 +498,9 @@ pipeline {
     }
     
     stage('Deploy Monitoring') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '📊 Deploying Monitoring Stack (Grafana)...'
         withCredentials([
@@ -632,7 +642,9 @@ pipeline {
     }
     
     stage('Finalize Deployment') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '⚙️ Finalizing deployment and applying remaining resources...'
         withCredentials([
@@ -686,7 +698,9 @@ pipeline {
     }
     
     stage('Verify Infrastructure') {
-      when { params.ACTION == 'install' }
+      when { 
+        expression { params.ACTION == 'install' }
+      }
       steps {
         echo '✅ Comprehensive Infrastructure Verification...'
         withCredentials([
