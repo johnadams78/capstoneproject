@@ -90,15 +90,16 @@ resource "aws_launch_template" "web_lt" {
   user_data = base64encode(<<-EOT
     #!/bin/bash
     set -e
-    yum update -y
     
-    # Install LAMP stack
+    # Install LAMP stack (skip yum update for faster boot)
     amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
     yum install -y httpd mariadb php-mysqlnd
     
-    # Start Apache
+    # Start Apache with retry logic
     systemctl start httpd
     systemctl enable httpd
+    sleep 5
+    systemctl restart httpd
     
     # Create car dealership website
     cat > /var/www/html/index.php <<'PHP'
@@ -437,8 +438,9 @@ resource "aws_autoscaling_group" "web_asg" {
     id      = aws_launch_template.web_lt.id
     version = "$Latest"
   }
-  load_balancers    = [aws_elb.web_elb.name]
-  health_check_type = "ELB"
+  load_balancers            = [aws_elb.web_elb.name]
+  health_check_type         = "ELB"
+  health_check_grace_period = 600  # 10 minutes for user data to complete (yum update + LAMP install)
   tag {
     key                 = "Name"
     value               = "${var.project_name}-web-asg"
