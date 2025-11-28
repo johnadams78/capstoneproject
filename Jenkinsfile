@@ -1590,7 +1590,7 @@ pipeline {
             # 10. Delete Route Tables (except main)
             echo "🔄 Checking for Route Tables..."
             if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
-              RT_IDS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query "RouteTables[?Associations[0].Main!=\`true\`].RouteTableId" --output text 2>/dev/null || echo "")
+              RT_IDS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query 'RouteTables[?Associations[0].Main!=`true`].RouteTableId' --output text 2>/dev/null || echo "")
               if [ ! -z "$RT_IDS" ]; then
                 for rt in $RT_IDS; do
                   # First disassociate
