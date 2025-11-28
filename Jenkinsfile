@@ -85,7 +85,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform']
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
           ]) {
             sh 'terraform init -input=false'
           }
@@ -123,7 +123,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform'],
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
             string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
           ]) {
             echo "=== Running Terraform Plan ==="
@@ -187,7 +187,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform']
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
           ]) {
             sh 'test -f tfplan || (echo "❌ tfplan not found; run Plan first" && exit 1)'
             
@@ -210,7 +210,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform']
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
           ]) {
             echo "=== Infrastructure Verification ==="
             script {
@@ -270,7 +270,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform']
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
           ]) {
             echo "=== Running Health Checks ==="
             script {
@@ -406,7 +406,7 @@ pipeline {
       steps {
         dir(env.PROJECT_DIR) {
           withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-terraform'],
+            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
             string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
           ]) {
             echo "╔════════════════════════════════════════════════════════════╗"
@@ -513,7 +513,7 @@ pipeline {
         echo "🔍 Common Issues & Solutions:"
         echo ""
         echo "1️⃣  AWS Credentials:"
-        echo "   • Verify 'aws-terraform' credentials in Jenkins"
+        echo "   • Verify 'aws-credentials' credentials in Jenkins"
         echo "   • Check AWS access key and secret key are valid"
         echo "   • Ensure credentials have not expired"
         echo ""
