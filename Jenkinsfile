@@ -83,9 +83,11 @@ pipeline {
     }
     
     stage('Deploy VPC') {
-      when { expression { params.ACTION == 'install' } }
+      when { params.ACTION == 'install' }
       steps {
-        echo '🌐 Deploying VPC and Networking...'
+        echo "🌐 Deploying VPC and Networking..."
+        echo "DEBUG: ACTION parameter value: ${params.ACTION}"
+        echo "DEBUG: Should execute VPC stage: ${params.ACTION == 'install'}"
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
@@ -182,7 +184,7 @@ pipeline {
     }
     
     stage('Deploy IAM') {
-      when { expression { params.ACTION == 'install' } }
+      when { params.ACTION == 'install' }
       steps {
         echo '🔐 Deploying IAM Roles and Policies...'
         withCredentials([
@@ -261,12 +263,7 @@ pipeline {
     }
     
     stage('Deploy Database') {
-      when { 
-        allOf {
-          expression { params.ACTION == 'install' }
-          expression { params.DEPLOY_DATABASE == true }
-        }
-      }
+      when { params.ACTION == 'install' }
       steps {
         echo '🗄️ Deploying Aurora RDS Database (this takes ~5-7 minutes)...'
         withCredentials([
@@ -360,12 +357,7 @@ pipeline {
     }
     
     stage('Deploy Web Tier') {
-      when { 
-        allOf {
-          expression { params.ACTION == 'install' }
-          expression { params.DEPLOY_WEB == true }
-        }
-      }
+      when { params.ACTION == 'install' }
       steps {
         echo '🖥️ Deploying Web Servers and Application...'
         withCredentials([
@@ -498,12 +490,7 @@ pipeline {
     }
     
     stage('Deploy Monitoring') {
-      when { 
-        allOf {
-          expression { params.ACTION == 'install' }
-          expression { params.DEPLOY_MONITORING == true }
-        }
-      }
+      when { params.ACTION == 'install' }
       steps {
         echo '📊 Deploying Monitoring Stack (Grafana)...'
         withCredentials([
@@ -645,7 +632,7 @@ pipeline {
     }
     
     stage('Finalize Deployment') {
-      when { expression { params.ACTION == 'install' } }
+      when { params.ACTION == 'install' }
       steps {
         echo '⚙️ Finalizing deployment and applying remaining resources...'
         withCredentials([
@@ -699,7 +686,7 @@ pipeline {
     }
     
     stage('Verify Infrastructure') {
-      when { expression { params.ACTION == 'install' } }
+      when { params.ACTION == 'install' }
       steps {
         echo '✅ Comprehensive Infrastructure Verification...'
         withCredentials([
