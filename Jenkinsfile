@@ -1221,6 +1221,8 @@ pipeline {
           string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
+            set -e  # Exit on error
+            
             echo "=========================================="
             echo "DESTROY OPERATION VALIDATION"
             echo "=========================================="
@@ -1248,13 +1250,26 @@ pipeline {
             echo "   - Deploy Web: $WEB_DEPLOY"  
             echo "   - Deploy Monitoring: $MON_DEPLOY"
             
+            # Temporarily disable exit on error for terraform refresh
+            set +e
             terraform refresh -input=false \
               -var "deploy_database=$DB_DEPLOY" \
               -var "deploy_web=$WEB_DEPLOY" \
               -var "deploy_monitoring=$MON_DEPLOY" \
               -var "db_master_password=${TF_DB_PASSWORD}"
             
+            REFRESH_EXIT_CODE=$?
+            # Re-enable exit on error  
+            set -e
+            
+            if [ $REFRESH_EXIT_CODE -ne 0 ]; then
+              echo "⚠️ Warning: Terraform refresh had issues, but continuing with destroy plan..."
+            fi
+            
             echo "📋 Creating destroy plan..."
+            
+            # Temporarily disable exit on error for terraform plan
+            set +e
             terraform plan -destroy \
               -var "deploy_database=$DB_DEPLOY" \
               -var "deploy_web=$WEB_DEPLOY" \
@@ -1264,6 +1279,8 @@ pipeline {
               -detailed-exitcode
             
             DESTROY_PLAN_EXIT_CODE=$?
+            # Re-enable exit on error
+            set -e
             
             if [ $DESTROY_PLAN_EXIT_CODE -eq 1 ]; then
               echo "❌ Destroy plan failed!"
@@ -1276,6 +1293,8 @@ pipeline {
               echo "📊 Destroy plan created successfully - resources found for destruction"
               
               echo "🔍 Resources to be destroyed:"
+              # Use set +e to ignore errors from jq commands
+              set +e
               terraform show -json destroy-plan.tfplan | jq -r '
                 if .resource_changes then
                   .resource_changes | map(select(.change.actions | contains(["delete"]))) | .[] |
@@ -1283,7 +1302,7 @@ pipeline {
                 else
                   "No resources to destroy"
                 end
-              ' || echo "Destroy plan analysis completed"
+              ' 2>/dev/null || echo "🗑️ Resources will be destroyed (plan analysis completed)"
               
               # Count resources by type for better overview
               echo ""
@@ -1298,28 +1317,37 @@ pipeline {
                 else
                   "   - No resources to destroy"
                 end
-              ' || echo "Destroy summary completed"
+              ' 2>/dev/null || echo "   - Destroy summary completed"
+              
+              # Re-enable error checking
+              set -e
             fi
             
             echo "🔍 Checking for expensive resources that will be destroyed..."
             
+            # Use set +e to ignore errors from AWS CLI commands
+            set +e
+            
             # Check for RDS clusters
             RDS_CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)].DBClusterIdentifier' --output text 2>/dev/null || echo "")
-            if [ ! -z "$RDS_CLUSTERS" ]; then
+            if [ ! -z "$RDS_CLUSTERS" ] && [ "$RDS_CLUSTERS" != "None" ]; then
               echo "💰 WARNING: RDS clusters will be destroyed: $RDS_CLUSTERS"
             fi
             
             # Check for Load Balancers
             ALB_COUNT=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
-            if [ "$ALB_COUNT" -gt "0" ]; then
+            if [ "$ALB_COUNT" != "0" ] && [ "$ALB_COUNT" -gt "0" ] 2>/dev/null; then
               echo "💰 WARNING: $ALB_COUNT Load Balancer(s) will be destroyed"
             fi
             
             # Check for NAT Gateways
             NAT_COUNT=$(aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=*capstoneproject*" --query 'NatGateways[?State==`available`] | length(@)' --output text 2>/dev/null || echo "0")
-            if [ "$NAT_COUNT" -gt "0" ]; then
+            if [ "$NAT_COUNT" != "0" ] && [ "$NAT_COUNT" -gt "0" ] 2>/dev/null; then
               echo "💰 WARNING: $NAT_COUNT NAT Gateway(s) will be destroyed (saves hourly charges)"
             fi
+            
+            # Re-enable error checking
+            set -e
             
             # Clean up destroy plan
             rm -f destroy-plan.tfplan
