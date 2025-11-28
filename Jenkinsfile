@@ -13,6 +13,7 @@ pipeline {
     TF_IN_AUTOMATION = 'true'
     TF_CLI_ARGS = '-no-color'
     CLEANUP_MODE = 'false'
+    PLAN_VALIDATED = 'false'
   }
   
   parameters {
@@ -70,23 +71,167 @@ pipeline {
           string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
+            echo "🔍 Validating Terraform configuration..."
+            terraform validate
+            
+            if [ $? -ne 0 ]; then
+              echo "❌ Terraform configuration validation failed!"
+              exit 1
+            fi
+            
+            echo "✅ Terraform configuration is valid"
+            
+            echo "📋 Creating comprehensive Terraform plan..."
             terraform plan \
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
               -var "db_master_password=${TF_DB_PASSWORD}" \
-              -out=tfplan
+              -out=tfplan \
+              -detailed-exitcode
             
-            echo "✅ Plan created successfully"
+            PLAN_EXIT_CODE=$?
+            
+            if [ $PLAN_EXIT_CODE -eq 0 ]; then
+              echo "📊 No changes detected - infrastructure is up to date"
+            elif [ $PLAN_EXIT_CODE -eq 2 ]; then
+              echo "📊 Changes detected - plan created successfully"
+            else
+              echo "❌ Terraform plan failed with exit code: $PLAN_EXIT_CODE"
+              exit 1
+            fi
+            
+            echo "🔍 Plan Summary:"
+            terraform show -json tfplan | jq -r '
+              if .resource_changes then
+                "Resources to be created: " + (.resource_changes | map(select(.change.actions | contains(["create"]))) | length | tostring) +
+                "\nResources to be modified: " + (.resource_changes | map(select(.change.actions | contains(["update"]))) | length | tostring) +
+                "\nResources to be destroyed: " + (.resource_changes | map(select(.change.actions | contains(["delete"]))) | length | tostring)
+              else
+                "No resource changes detected"
+              end
+            '
+            
+            echo "✅ Infrastructure plan created and validated successfully"
           '''
         }
         archiveArtifacts artifacts: 'tfplan', allowEmptyArchive: true
+        script {
+          env.PLAN_VALIDATED = 'true'
+        }
+      }
+    }
+    
+    stage('Validate Plan for Deployment') {
+      when { 
+        expression { params.ACTION == 'install' }
+      }
+      steps {
+        echo '🔍 Pre-deployment validation...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+        ]) {
+          sh '''
+            echo "=========================================="
+            echo "PRE-DEPLOYMENT VALIDATION"
+            echo "=========================================="
+            
+            echo "🔍 Validating Terraform configuration..."
+            terraform validate
+            
+            if [ $? -ne 0 ]; then
+              echo "❌ Terraform configuration validation failed!"
+              echo "🚨 Cannot proceed with deployment - fix configuration errors first"
+              exit 1
+            fi
+            
+            echo "✅ Terraform configuration is valid"
+            
+            echo "📋 Creating pre-deployment validation plan..."
+            terraform plan \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -out=validation-plan.tfplan \
+              -detailed-exitcode
+            
+            VALIDATION_EXIT_CODE=$?
+            
+            if [ $VALIDATION_EXIT_CODE -eq 1 ]; then
+              echo "❌ Pre-deployment planning failed!"
+              echo "🚨 Cannot proceed with deployment - fix planning errors first"
+              exit 1
+            elif [ $VALIDATION_EXIT_CODE -eq 0 ]; then
+              echo "📊 No changes needed - infrastructure appears to be up to date"
+              echo "⚠️ Proceeding with deployment verification..."
+            elif [ $VALIDATION_EXIT_CODE -eq 2 ]; then
+              echo "📊 Deployment plan validated - changes detected and ready to apply"
+            fi
+            
+            echo "🔍 Pre-deployment Plan Analysis:"
+            terraform show -json validation-plan.tfplan | jq -r '
+              if .resource_changes then
+                .resource_changes | group_by(.change.actions[0]) | map({
+                  action: .[0].change.actions[0],
+                  count: length,
+                  resources: map(.address)
+                }) | .[] | 
+                "Action: " + .action + " (" + (.count | tostring) + " resources)" +
+                "\n  " + (.resources | join("\n  "))
+              else
+                "No resource changes detected in validation plan"
+              end
+            ' || echo "Plan analysis completed"
+            
+            echo "🔍 Checking AWS credentials and permissions..."
+            
+            # Verify AWS access
+            AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+            AWS_REGION=$(aws configure get region || echo "us-east-1")
+            AWS_USER=$(aws sts get-caller-identity --query Arn --output text)
+            
+            echo "✅ AWS Access Verified:"
+            echo "   - Account: $AWS_ACCOUNT"
+            echo "   - Region: $AWS_REGION" 
+            echo "   - User/Role: $AWS_USER"
+            
+            # Check for existing resources that might conflict
+            echo "🔍 Checking for existing conflicting resources..."
+            
+            EXISTING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=capstoneproject-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+            EXISTING_DB=$(aws rds describe-db-clusters --db-cluster-identifier "capstoneproject-cluster" --query 'DBClusters[0].DBClusterIdentifier' --output text 2>/dev/null || echo "None")
+            
+            if [ "$EXISTING_VPC" != "None" ] && [ "$EXISTING_VPC" != "null" ]; then
+              echo "⚠️ Found existing VPC: $EXISTING_VPC"
+              echo "   This may indicate partial infrastructure already exists"
+            fi
+            
+            if [ "$EXISTING_DB" != "None" ] && [ "$EXISTING_DB" != "null" ]; then
+              echo "⚠️ Found existing RDS cluster: $EXISTING_DB"
+              echo "   This may indicate partial infrastructure already exists"
+            fi
+            
+            # Clean up validation plan
+            rm -f validation-plan.tfplan
+            
+            echo "✅ Pre-deployment validation completed successfully!"
+            echo "🚀 Ready to proceed with sequential deployment stages"
+          '''
+        }
+        script {
+          env.PLAN_VALIDATED = 'true'
+        }
       }
     }
     
     stage('Deploy VPC') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo "🌐 Deploying VPC and Networking..."
@@ -199,7 +344,10 @@ pipeline {
     
     stage('Deploy IAM') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '🔐 Deploying IAM Roles and Policies...'
@@ -288,7 +436,10 @@ pipeline {
     
     stage('Deploy Database') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '🗄️ Deploying Aurora RDS Database (this takes ~5-7 minutes)...'
@@ -393,7 +544,10 @@ pipeline {
     
     stage('Deploy Web Tier') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '🖥️ Deploying Web Servers and Application...'
@@ -537,7 +691,10 @@ pipeline {
     
     stage('Deploy Monitoring') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '📊 Deploying Monitoring Stack (Grafana)...'
@@ -699,7 +856,10 @@ pipeline {
     
     stage('Finalize Deployment') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '⚙️ Finalizing deployment and applying remaining resources...'
@@ -744,7 +904,7 @@ pipeline {
             
             # Clean up plan files
             echo "Cleaning up temporary plan files..."
-            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan
+            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan validation-plan.tfplan
             
             echo "✅ Deployment finalized successfully!"
             echo "🎉 All infrastructure components have been deployed and verified!"
@@ -755,7 +915,10 @@ pipeline {
     
     stage('Verify Infrastructure') {
       when { 
-        expression { params.ACTION == 'install' }
+        allOf {
+          expression { params.ACTION == 'install' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
       }
       steps {
         echo '✅ Comprehensive Infrastructure Verification...'
@@ -854,23 +1017,144 @@ pipeline {
       }
     }
     
+    stage('Validate Destroy Plan') {
+      when { 
+        expression { params.ACTION == 'destroy' }
+      }
+      steps {
+        echo '🔍 Validating destroy operation...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+        ]) {
+          sh '''
+            echo "=========================================="
+            echo "DESTROY OPERATION VALIDATION"
+            echo "=========================================="
+            
+            echo "🔍 Validating Terraform configuration..."
+            terraform validate
+            
+            if [ $? -ne 0 ]; then
+              echo "❌ Terraform configuration validation failed!"
+              echo "🚨 Cannot proceed with destroy - fix configuration errors first"
+              exit 1
+            fi
+            
+            echo "✅ Terraform configuration is valid"
+            
+            echo "🔍 Checking current infrastructure state..."
+            terraform refresh -input=false \
+              -var "deploy_database=true" \
+              -var "deploy_web=true" \
+              -var "deploy_monitoring=true" \
+              -var "db_master_password=${TF_DB_PASSWORD}"
+            
+            echo "📋 Creating destroy plan..."
+            terraform plan -destroy \
+              -var "deploy_database=true" \
+              -var "deploy_web=true" \
+              -var "deploy_monitoring=true" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -out=destroy-plan.tfplan \
+              -detailed-exitcode
+            
+            DESTROY_PLAN_EXIT_CODE=$?
+            
+            if [ $DESTROY_PLAN_EXIT_CODE -eq 1 ]; then
+              echo "❌ Destroy plan failed!"
+              echo "🚨 Cannot proceed with destruction"
+              exit 1
+            elif [ $DESTROY_PLAN_EXIT_CODE -eq 0 ]; then
+              echo "📊 No resources found to destroy"
+              echo "✅ Infrastructure appears to be already clean"
+            elif [ $DESTROY_PLAN_EXIT_CODE -eq 2 ]; then
+              echo "📊 Destroy plan created - resources found for destruction"
+              
+              echo "🔍 Resources to be destroyed:"
+              terraform show -json destroy-plan.tfplan | jq -r '
+                if .resource_changes then
+                  .resource_changes | map(select(.change.actions | contains(["delete"]))) | .[] |
+                  "🗑️  " + .type + "." + .name + " (" + .address + ")"
+                else
+                  "No resources to destroy"
+                end
+              ' || echo "Destroy plan analysis completed"
+              
+              # Count resources by type for better overview
+              echo ""
+              echo "📊 Destruction summary:"
+              terraform show -json destroy-plan.tfplan | jq -r '
+                if .resource_changes then
+                  .resource_changes | map(select(.change.actions | contains(["delete"]))) | group_by(.type) | map({
+                    type: .[0].type,
+                    count: length
+                  }) | .[] | 
+                  "   - " + .type + ": " + (.count | tostring) + " resource(s)"
+                else
+                  "   - No resources to destroy"
+                end
+              ' || echo "Destroy summary completed"
+            fi
+            
+            echo "🔍 Checking for expensive resources that will be destroyed..."
+            
+            # Check for RDS clusters
+            RDS_CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)].DBClusterIdentifier' --output text 2>/dev/null || echo "")
+            if [ ! -z "$RDS_CLUSTERS" ]; then
+              echo "💰 WARNING: RDS clusters will be destroyed: $RDS_CLUSTERS"
+            fi
+            
+            # Check for Load Balancers
+            ALB_COUNT=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
+            if [ "$ALB_COUNT" -gt "0" ]; then
+              echo "💰 WARNING: $ALB_COUNT Load Balancer(s) will be destroyed"
+            fi
+            
+            # Check for NAT Gateways
+            NAT_COUNT=$(aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=*capstoneproject*" --query 'NatGateways[?State==`available`] | length(@)' --output text 2>/dev/null || echo "0")
+            if [ "$NAT_COUNT" -gt "0" ]; then
+              echo "💰 WARNING: $NAT_COUNT NAT Gateway(s) will be destroyed (saves hourly charges)"
+            fi
+            
+            # Clean up destroy plan
+            rm -f destroy-plan.tfplan
+            
+            echo "✅ Destroy validation completed"
+            echo "⚠️ Review the resources listed above before confirming destruction"
+          '''
+        }
+        script {
+          env.PLAN_VALIDATED = 'true'
+        }
+      }
+    }
+    
     stage('Destroy Confirmation') {
       when { 
         allOf {
           expression { params.ACTION == 'destroy' }
           expression { params.AUTO_APPROVE == false }
+          expression { env.PLAN_VALIDATED == 'true' }
         }
       }
       steps {
         echo '⚠️ DESTRUCTION WARNING: This will permanently destroy all infrastructure!'
+        echo '💰 This will stop all AWS charges for these resources'
+        echo '📋 Review the destroy validation results above'
         timeout(time: 30, unit: 'MINUTES') {
-          input message: '💥 Are you ABSOLUTELY SURE you want to DESTROY everything?', ok: 'Yes, Destroy All'
+          input message: '💥 Are you ABSOLUTELY SURE you want to DESTROY everything? This cannot be undone!', ok: 'Yes, Destroy All Infrastructure'
         }
       }
     }
     
     stage('Destroy Infrastructure') {
-      when { expression { params.ACTION == 'destroy' } }
+      when { 
+        allOf {
+          expression { params.ACTION == 'destroy' }
+          expression { env.PLAN_VALIDATED == 'true' }
+        }
+      }
       steps {
         echo '💥 Destroying all infrastructure...'
         withCredentials([
@@ -878,9 +1162,110 @@ pipeline {
           string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
-            echo "Destroying all AWS resources..."
-            terraform destroy -input=false -auto-approve -var "db_master_password=${TF_DB_PASSWORD}"
-            echo "✅ All infrastructure destroyed successfully"
+            echo "=========================================="
+            echo "🗑️  INFRASTRUCTURE DESTRUCTION"
+            echo "=========================================="
+            
+            echo "💥 Starting systematic infrastructure destruction..."
+            
+            # Final validation before destruction
+            echo "🔍 Final validation before destruction..."
+            terraform validate
+            if [ $? -ne 0 ]; then
+              echo "❌ Configuration validation failed - aborting destruction"
+              exit 1
+            fi
+            
+            # Refresh state to ensure we have latest information
+            echo "🔄 Refreshing Terraform state..."
+            terraform refresh -input=false \
+              -var "deploy_database=true" \
+              -var "deploy_web=true" \
+              -var "deploy_monitoring=true" \
+              -var "db_master_password=${TF_DB_PASSWORD}"
+            
+            # Show what will be destroyed
+            echo "📋 Final destroy plan:"
+            terraform plan -destroy \
+              -var "deploy_database=true" \
+              -var "deploy_web=true" \
+              -var "deploy_monitoring=true" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -no-color
+            
+            echo ""
+            echo "🚀 Executing infrastructure destruction..."
+            
+            # Execute the destroy with proper error handling
+            terraform destroy -input=false -auto-approve \
+              -var "deploy_database=true" \
+              -var "deploy_web=true" \
+              -var "deploy_monitoring=true" \
+              -var "db_master_password=${TF_DB_PASSWORD}"
+            
+            DESTROY_EXIT_CODE=$?
+            
+            if [ $DESTROY_EXIT_CODE -eq 0 ]; then
+              echo "✅ Terraform destruction completed successfully"
+            else
+              echo "❌ Terraform destruction failed with exit code: $DESTROY_EXIT_CODE"
+              echo "🧹 Attempting manual cleanup of remaining resources..."
+              
+              # Manual cleanup as fallback
+              echo "🔍 Checking for remaining AWS resources..."
+              
+              # Check and cleanup remaining RDS clusters
+              REMAINING_CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)].DBClusterIdentifier' --output text 2>/dev/null || echo "")
+              if [ ! -z "$REMAINING_CLUSTERS" ]; then
+                echo "🗄️ Cleaning up remaining RDS clusters: $REMAINING_CLUSTERS"
+                for cluster in $REMAINING_CLUSTERS; do
+                  aws rds delete-db-cluster --db-cluster-identifier "$cluster" --skip-final-snapshot --delete-automated-backups 2>/dev/null || echo "Could not delete cluster $cluster"
+                done
+              fi
+              
+              # Check and cleanup remaining Load Balancers
+              REMAINING_ALBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)].LoadBalancerArn' --output text 2>/dev/null || echo "")
+              if [ ! -z "$REMAINING_ALBS" ]; then
+                echo "⚖️ Cleaning up remaining Load Balancers..."
+                for alb in $REMAINING_ALBS; do
+                  aws elbv2 delete-load-balancer --load-balancer-arn "$alb" 2>/dev/null || echo "Could not delete ALB $alb"
+                done
+              fi
+              
+              # Check and cleanup Auto Scaling Groups
+              aws autoscaling delete-auto-scaling-group --auto-scaling-group-name "capstoneproject-asg" --force-delete 2>/dev/null || echo "ASG not found"
+              
+              # Check and cleanup EC2 instances
+              REMAINING_INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-*" "Name=instance-state-name,Values=running,pending,stopping,stopped" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || echo "")
+              if [ ! -z "$REMAINING_INSTANCES" ]; then
+                echo "💻 Terminating remaining EC2 instances: $REMAINING_INSTANCES"
+                aws ec2 terminate-instances --instance-ids $REMAINING_INSTANCES 2>/dev/null || echo "Could not terminate instances"
+              fi
+              
+              echo "⚠️ Some resources may require manual cleanup from AWS console"
+            fi
+            
+            # Final verification
+            echo "🔍 Final verification of destruction..."
+            sleep 30
+            
+            # Check if major resources still exist
+            REMAINING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=capstoneproject-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+            REMAINING_RDS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
+            REMAINING_ALB=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
+            
+            echo "📊 Destruction Summary:"
+            echo "   - VPC: $([ "$REMAINING_VPC" = "None" ] && echo "✅ Destroyed" || echo "⚠️ May still exist: $REMAINING_VPC")"
+            echo "   - RDS Clusters: $([ "$REMAINING_RDS" = "0" ] && echo "✅ Destroyed" || echo "⚠️ $REMAINING_RDS still exist")"
+            echo "   - Load Balancers: $([ "$REMAINING_ALB" = "0" ] && echo "✅ Destroyed" || echo "⚠️ $REMAINING_ALB still exist")"
+            
+            if [ "$REMAINING_VPC" = "None" ] && [ "$REMAINING_RDS" = "0" ] && [ "$REMAINING_ALB" = "0" ]; then
+              echo "✅ All infrastructure destroyed successfully!"
+              echo "💰 AWS charges for this project have stopped"
+            else
+              echo "⚠️ Some resources may still exist - please verify in AWS console"
+              exit 1
+            fi
           '''
         }
         archiveArtifacts artifacts: '*.txt', allowEmptyArchive: true
@@ -898,7 +1283,7 @@ pipeline {
         try {
           sh '''
             echo "🧹 Cleaning up temporary files..."
-            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan
+            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan validation-plan.tfplan destroy-plan.tfplan
             echo "✅ Temporary files cleaned up"
           '''
         } catch (Exception e) {
