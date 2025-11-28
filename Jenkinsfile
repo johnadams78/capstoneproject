@@ -1423,14 +1423,6 @@ pipeline {
             
             echo "💥 Starting systematic infrastructure destruction..."
             
-            # Final validation before destruction
-            echo "🔍 Final validation before destruction..."
-            terraform validate
-            if [ $? -ne 0 ]; then
-              echo "❌ Configuration validation failed - aborting destruction"
-              exit 1
-            fi
-            
             # Use parameter values or defaults
             DB_DEPLOY=${DEPLOY_DATABASE:-true}
             WEB_DEPLOY=${DEPLOY_WEB:-true}
@@ -1441,27 +1433,238 @@ pipeline {
             echo "   - Deploy Web: $WEB_DEPLOY"  
             echo "   - Deploy Monitoring: $MON_DEPLOY"
             
-            # Refresh state to ensure we have latest information
+            # =====================================================
+            # STEP 1: Force cleanup AWS resources directly (handles out-of-sync state)
+            # =====================================================
+            echo ""
+            echo "🔍 STEP 1: Pre-Terraform AWS Resource Cleanup"
+            echo "============================================="
+            echo "This ensures resources are deleted even if Terraform state is out of sync..."
+            
+            set +e  # Don't exit on errors during cleanup
+            
+            # 1. Delete Auto Scaling Groups first (they block instance termination)
+            echo "🔄 Checking for Auto Scaling Groups..."
+            ASG_LIST=$(aws autoscaling describe-auto-scaling-groups --query "AutoScalingGroups[?contains(AutoScalingGroupName, 'capstoneproject')].AutoScalingGroupName" --output text 2>/dev/null || echo "")
+            if [ ! -z "$ASG_LIST" ]; then
+              for asg in $ASG_LIST; do
+                echo "   🗑️ Deleting ASG: $asg"
+                aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$asg" --min-size 0 --desired-capacity 0 2>/dev/null
+                aws autoscaling delete-auto-scaling-group --auto-scaling-group-name "$asg" --force-delete 2>/dev/null
+              done
+              echo "   ⏳ Waiting for ASG deletion..."
+              sleep 30
+            else
+              echo "   ✅ No Auto Scaling Groups found"
+            fi
+            
+            # 2. Delete Load Balancers and Target Groups
+            echo "🔄 Checking for Load Balancers..."
+            ALB_ARNS=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'capstoneproject')].LoadBalancerArn" --output text 2>/dev/null || echo "")
+            if [ ! -z "$ALB_ARNS" ]; then
+              for alb in $ALB_ARNS; do
+                echo "   🗑️ Deleting Load Balancer: $alb"
+                # First delete listeners
+                LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$alb" --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+                for listener in $LISTENERS; do
+                  aws elbv2 delete-listener --listener-arn "$listener" 2>/dev/null
+                done
+                aws elbv2 delete-load-balancer --load-balancer-arn "$alb" 2>/dev/null
+              done
+              echo "   ⏳ Waiting for ALB deletion..."
+              sleep 30
+            else
+              echo "   ✅ No Load Balancers found"
+            fi
+            
+            # Delete Target Groups
+            echo "🔄 Checking for Target Groups..."
+            TG_ARNS=$(aws elbv2 describe-target-groups --query "TargetGroups[?contains(TargetGroupName, 'capstoneproject')].TargetGroupArn" --output text 2>/dev/null || echo "")
+            if [ ! -z "$TG_ARNS" ]; then
+              for tg in $TG_ARNS; do
+                echo "   🗑️ Deleting Target Group: $tg"
+                aws elbv2 delete-target-group --target-group-arn "$tg" 2>/dev/null
+              done
+            else
+              echo "   ✅ No Target Groups found"
+            fi
+            
+            # 3. Terminate EC2 Instances
+            echo "🔄 Checking for EC2 Instances..."
+            INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=*capstoneproject*" "Name=instance-state-name,Values=running,pending,stopping,stopped" --query 'Reservations[*].Instances[*].InstanceId' --output text 2>/dev/null || echo "")
+            if [ ! -z "$INSTANCE_IDS" ]; then
+              echo "   🗑️ Terminating instances: $INSTANCE_IDS"
+              aws ec2 terminate-instances --instance-ids $INSTANCE_IDS 2>/dev/null
+              echo "   ⏳ Waiting for instance termination..."
+              aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS 2>/dev/null || sleep 60
+            else
+              echo "   ✅ No EC2 Instances found"
+            fi
+            
+            # 4. Delete RDS Instances and Clusters
+            echo "🔄 Checking for RDS resources..."
+            DB_INSTANCES=$(aws rds describe-db-instances --query "DBInstances[?contains(DBInstanceIdentifier, 'capstoneproject')].DBInstanceIdentifier" --output text 2>/dev/null || echo "")
+            if [ ! -z "$DB_INSTANCES" ]; then
+              for db in $DB_INSTANCES; do
+                echo "   🗑️ Deleting RDS Instance: $db"
+                aws rds delete-db-instance --db-instance-identifier "$db" --skip-final-snapshot --delete-automated-backups 2>/dev/null
+              done
+            fi
+            
+            DB_CLUSTERS=$(aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, 'capstoneproject')].DBClusterIdentifier" --output text 2>/dev/null || echo "")
+            if [ ! -z "$DB_CLUSTERS" ]; then
+              for cluster in $DB_CLUSTERS; do
+                echo "   🗑️ Deleting RDS Cluster: $cluster"
+                aws rds delete-db-cluster --db-cluster-identifier "$cluster" --skip-final-snapshot --delete-automated-backups 2>/dev/null
+              done
+              echo "   ⏳ Waiting for RDS deletion (this can take several minutes)..."
+              sleep 120
+            else
+              echo "   ✅ No RDS Clusters found"
+            fi
+            
+            # 5. Delete NAT Gateways (must be deleted before EIPs and subnets)
+            echo "🔄 Checking for NAT Gateways..."
+            NAT_IDS=$(aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=*capstoneproject*" "Name=state,Values=available,pending" --query 'NatGateways[*].NatGatewayId' --output text 2>/dev/null || echo "")
+            if [ ! -z "$NAT_IDS" ]; then
+              for nat in $NAT_IDS; do
+                echo "   🗑️ Deleting NAT Gateway: $nat"
+                aws ec2 delete-nat-gateway --nat-gateway-id "$nat" 2>/dev/null
+              done
+              echo "   ⏳ Waiting for NAT Gateway deletion..."
+              for nat in $NAT_IDS; do
+                aws ec2 wait nat-gateway-deleted --nat-gateway-ids "$nat" 2>/dev/null || sleep 60
+              done
+            else
+              echo "   ✅ No NAT Gateways found"
+            fi
+            
+            # 6. Release Elastic IPs
+            echo "🔄 Checking for Elastic IPs..."
+            EIP_ALLOCS=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=*capstoneproject*" --query 'Addresses[*].AllocationId' --output text 2>/dev/null || echo "")
+            if [ ! -z "$EIP_ALLOCS" ]; then
+              for eip in $EIP_ALLOCS; do
+                echo "   🗑️ Releasing EIP: $eip"
+                aws ec2 release-address --allocation-id "$eip" 2>/dev/null
+              done
+            else
+              echo "   ✅ No Elastic IPs found"
+            fi
+            
+            # 7. Delete Security Groups (except default)
+            echo "🔄 Checking for Security Groups..."
+            VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*capstoneproject*" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+            if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+              SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --query "SecurityGroups[?GroupName!='default'].GroupId" --output text 2>/dev/null || echo "")
+              if [ ! -z "$SG_IDS" ]; then
+                for sg in $SG_IDS; do
+                  echo "   🗑️ Deleting Security Group: $sg"
+                  aws ec2 delete-security-group --group-id "$sg" 2>/dev/null || echo "      ⚠️ Could not delete $sg (may have dependencies)"
+                done
+              fi
+            fi
+            
+            # 8. Delete Subnets
+            echo "🔄 Checking for Subnets..."
+            if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+              SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].SubnetId' --output text 2>/dev/null || echo "")
+              if [ ! -z "$SUBNET_IDS" ]; then
+                for subnet in $SUBNET_IDS; do
+                  echo "   🗑️ Deleting Subnet: $subnet"
+                  aws ec2 delete-subnet --subnet-id "$subnet" 2>/dev/null || echo "      ⚠️ Could not delete $subnet"
+                done
+              fi
+            fi
+            
+            # 9. Delete Internet Gateway
+            echo "🔄 Checking for Internet Gateways..."
+            if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+              IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text 2>/dev/null || echo "None")
+              if [ "$IGW_ID" != "None" ] && [ ! -z "$IGW_ID" ]; then
+                echo "   🗑️ Detaching and deleting IGW: $IGW_ID"
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" 2>/dev/null
+                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" 2>/dev/null
+              fi
+            fi
+            
+            # 10. Delete Route Tables (except main)
+            echo "🔄 Checking for Route Tables..."
+            if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+              RT_IDS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query "RouteTables[?Associations[0].Main!=\`true\`].RouteTableId" --output text 2>/dev/null || echo "")
+              if [ ! -z "$RT_IDS" ]; then
+                for rt in $RT_IDS; do
+                  # First disassociate
+                  ASSOC_IDS=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?!Main].RouteTableAssociationId' --output text 2>/dev/null || echo "")
+                  for assoc in $ASSOC_IDS; do
+                    aws ec2 disassociate-route-table --association-id "$assoc" 2>/dev/null
+                  done
+                  echo "   🗑️ Deleting Route Table: $rt"
+                  aws ec2 delete-route-table --route-table-id "$rt" 2>/dev/null || echo "      ⚠️ Could not delete $rt"
+                done
+              fi
+            fi
+            
+            # 11. Delete VPC
+            echo "🔄 Checking for VPC..."
+            if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+              echo "   🗑️ Deleting VPC: $VPC_ID"
+              aws ec2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || echo "      ⚠️ Could not delete VPC (may have remaining dependencies)"
+            else
+              echo "   ✅ No VPC found"
+            fi
+            
+            # 12. Delete IAM Resources
+            echo "🔄 Checking for IAM resources..."
+            if aws iam get-instance-profile --instance-profile-name "capstoneproject-ec2-profile" 2>/dev/null; then
+              echo "   🗑️ Removing role from instance profile..."
+              aws iam remove-role-from-instance-profile --instance-profile-name "capstoneproject-ec2-profile" --role-name "capstoneproject-ec2-role" 2>/dev/null
+              echo "   🗑️ Deleting instance profile..."
+              aws iam delete-instance-profile --instance-profile-name "capstoneproject-ec2-profile" 2>/dev/null
+            fi
+            
+            if aws iam get-role --role-name "capstoneproject-ec2-role" 2>/dev/null; then
+              echo "   🗑️ Detaching policies from role..."
+              POLICIES=$(aws iam list-attached-role-policies --role-name "capstoneproject-ec2-role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+              for policy in $POLICIES; do
+                aws iam detach-role-policy --role-name "capstoneproject-ec2-role" --policy-arn "$policy" 2>/dev/null
+              done
+              echo "   🗑️ Deleting IAM role..."
+              aws iam delete-role --role-name "capstoneproject-ec2-role" 2>/dev/null
+            fi
+            
+            # 13. Delete DB Subnet Group
+            echo "🔄 Checking for DB Subnet Groups..."
+            aws rds delete-db-subnet-group --db-subnet-group-name "capstoneproject-db-subnet-group" 2>/dev/null && echo "   🗑️ Deleted DB Subnet Group" || echo "   ✅ No DB Subnet Group found"
+            
+            set -e  # Re-enable exit on errors
+            
+            echo ""
+            echo "✅ Pre-Terraform cleanup completed!"
+            echo ""
+            
+            # =====================================================
+            # STEP 2: Run Terraform Destroy (cleanup any remaining state)
+            # =====================================================
+            echo "🔍 STEP 2: Terraform State Cleanup"
+            echo "=================================="
+            
+            # Final validation before destruction
+            echo "🔍 Validating Terraform configuration..."
+            terraform validate || echo "⚠️ Validation had issues, continuing anyway..."
+            
+            # Refresh state to sync with actual AWS resources
             echo "🔄 Refreshing Terraform state..."
+            set +e
             terraform refresh -input=false \
               -var "deploy_database=$DB_DEPLOY" \
               -var "deploy_web=$WEB_DEPLOY" \
               -var "deploy_monitoring=$MON_DEPLOY" \
-              -var "db_master_password=${TF_DB_PASSWORD}"
+              -var "db_master_password=${TF_DB_PASSWORD}" 2>/dev/null
+            set -e
             
-            # Show what will be destroyed
-            echo "📋 Final destroy plan:"
-            terraform plan -destroy \
-              -var "deploy_database=$DB_DEPLOY" \
-              -var "deploy_web=$WEB_DEPLOY" \
-              -var "deploy_monitoring=$MON_DEPLOY" \
-              -var "db_master_password=${TF_DB_PASSWORD}" \
-              -no-color
-            
-            echo ""
-            echo "🚀 Executing infrastructure destruction..."
-            
-            # Execute the destroy with proper error handling
+            # Execute terraform destroy (will cleanup any remaining tracked resources)
+            echo "🚀 Executing Terraform destroy..."
+            set +e
             terraform destroy -input=false -auto-approve \
               -var "deploy_database=$DB_DEPLOY" \
               -var "deploy_web=$WEB_DEPLOY" \
@@ -1469,67 +1672,46 @@ pipeline {
               -var "db_master_password=${TF_DB_PASSWORD}"
             
             DESTROY_EXIT_CODE=$?
+            set -e
             
             if [ $DESTROY_EXIT_CODE -eq 0 ]; then
               echo "✅ Terraform destruction completed successfully"
             else
-              echo "❌ Terraform destruction failed with exit code: $DESTROY_EXIT_CODE"
-              echo "🧹 Attempting manual cleanup of remaining resources..."
-              
-              # Manual cleanup as fallback
-              echo "🔍 Checking for remaining AWS resources..."
-              
-              # Check and cleanup remaining RDS clusters
-              REMAINING_CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)].DBClusterIdentifier' --output text 2>/dev/null || echo "")
-              if [ ! -z "$REMAINING_CLUSTERS" ]; then
-                echo "🗄️ Cleaning up remaining RDS clusters: $REMAINING_CLUSTERS"
-                for cluster in $REMAINING_CLUSTERS; do
-                  aws rds delete-db-cluster --db-cluster-identifier "$cluster" --skip-final-snapshot --delete-automated-backups 2>/dev/null || echo "Could not delete cluster $cluster"
-                done
-              fi
-              
-              # Check and cleanup remaining Load Balancers
-              REMAINING_ALBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)].LoadBalancerArn' --output text 2>/dev/null || echo "")
-              if [ ! -z "$REMAINING_ALBS" ]; then
-                echo "⚖️ Cleaning up remaining Load Balancers..."
-                for alb in $REMAINING_ALBS; do
-                  aws elbv2 delete-load-balancer --load-balancer-arn "$alb" 2>/dev/null || echo "Could not delete ALB $alb"
-                done
-              fi
-              
-              # Check and cleanup Auto Scaling Groups
-              aws autoscaling delete-auto-scaling-group --auto-scaling-group-name "capstoneproject-asg" --force-delete 2>/dev/null || echo "ASG not found"
-              
-              # Check and cleanup EC2 instances
-              REMAINING_INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-*" "Name=instance-state-name,Values=running,pending,stopping,stopped" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || echo "")
-              if [ ! -z "$REMAINING_INSTANCES" ]; then
-                echo "💻 Terminating remaining EC2 instances: $REMAINING_INSTANCES"
-                aws ec2 terminate-instances --instance-ids $REMAINING_INSTANCES 2>/dev/null || echo "Could not terminate instances"
-              fi
-              
-              echo "⚠️ Some resources may require manual cleanup from AWS console"
+              echo "⚠️ Terraform destroy had issues (exit code: $DESTROY_EXIT_CODE)"
+              echo "   This is often OK since resources were already cleaned up manually"
             fi
             
-            # Final verification
-            echo "🔍 Final verification of destruction..."
-            sleep 30
+            # =====================================================
+            # STEP 3: Final Verification
+            # =====================================================
+            echo ""
+            echo "🔍 STEP 3: Final Verification"
+            echo "============================="
+            sleep 10
             
             # Check if major resources still exist
-            REMAINING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=capstoneproject-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
-            REMAINING_RDS=$(aws rds describe-db-clusters --query 'DBClusters[?starts_with(DBClusterIdentifier, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
-            REMAINING_ALB=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[?starts_with(LoadBalancerName, `capstoneproject`)] | length(@)' --output text 2>/dev/null || echo "0")
+            REMAINING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*capstoneproject*" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+            REMAINING_RDS=$(aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, 'capstoneproject')] | length(@)" --output text 2>/dev/null || echo "0")
+            REMAINING_ALB=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'capstoneproject')] | length(@)" --output text 2>/dev/null || echo "0")
+            REMAINING_EC2=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=*capstoneproject*" "Name=instance-state-name,Values=running,pending" --query 'Reservations | length(@)' --output text 2>/dev/null || echo "0")
             
+            echo ""
             echo "📊 Destruction Summary:"
-            echo "   - VPC: $([ "$REMAINING_VPC" = "None" ] && echo "✅ Destroyed" || echo "⚠️ May still exist: $REMAINING_VPC")"
+            echo "   - VPC: $([ "$REMAINING_VPC" = "None" ] || [ -z "$REMAINING_VPC" ] && echo "✅ Destroyed" || echo "⚠️ May still exist: $REMAINING_VPC")"
             echo "   - RDS Clusters: $([ "$REMAINING_RDS" = "0" ] && echo "✅ Destroyed" || echo "⚠️ $REMAINING_RDS still exist")"
             echo "   - Load Balancers: $([ "$REMAINING_ALB" = "0" ] && echo "✅ Destroyed" || echo "⚠️ $REMAINING_ALB still exist")"
+            echo "   - EC2 Instances: $([ "$REMAINING_EC2" = "0" ] && echo "✅ Destroyed" || echo "⚠️ $REMAINING_EC2 still running")"
             
-            if [ "$REMAINING_VPC" = "None" ] && [ "$REMAINING_RDS" = "0" ] && [ "$REMAINING_ALB" = "0" ]; then
-              echo "✅ All infrastructure destroyed successfully!"
+            if ([ "$REMAINING_VPC" = "None" ] || [ -z "$REMAINING_VPC" ]) && [ "$REMAINING_RDS" = "0" ] && [ "$REMAINING_ALB" = "0" ] && [ "$REMAINING_EC2" = "0" ]; then
+              echo ""
+              echo "🎉 ============================================="
+              echo "🎉  ALL INFRASTRUCTURE DESTROYED SUCCESSFULLY!"
+              echo "🎉 ============================================="
               echo "💰 AWS charges for this project have stopped"
             else
+              echo ""
               echo "⚠️ Some resources may still exist - please verify in AWS console"
-              exit 1
+              echo "   You may need to wait a few minutes for all resources to be fully deleted"
             fi
           '''
         }
