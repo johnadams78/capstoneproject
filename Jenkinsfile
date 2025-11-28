@@ -222,6 +222,9 @@ pipeline {
             echo "✅ Terraform configuration is valid"
             
             echo "📋 Creating pre-deployment validation plan..."
+            
+            # Allow terraform plan to return exit code 2 without failing the script
+            set +e
             terraform plan \
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
@@ -231,6 +234,7 @@ pipeline {
               -detailed-exitcode
             
             VALIDATION_EXIT_CODE=$?
+            set -e
             
             if [ $VALIDATION_EXIT_CODE -eq 1 ]; then
               echo "❌ Pre-deployment planning failed!"
