@@ -7,13 +7,13 @@ output "public_subnets" {
 }
 
 # Web Tier Outputs
-output "web_public_ip" {
-  value = var.deploy_web ? module.web[0].web_instance_public_ip : ""
-  description = "Public IP address of the web server"
+output "web_alb_dns" {
+  value = var.deploy_web ? module.web[0].alb_dns : ""
+  description = "DNS name of the Application Load Balancer"
 }
 
 output "web_url" {
-  value = var.deploy_web ? "http://${module.web[0].web_instance_public_ip}" : ""
+  value = var.deploy_web ? "http://${module.web[0].alb_dns}" : ""
   description = "URL to access the web application"
 }
 
