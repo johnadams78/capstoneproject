@@ -291,6 +291,9 @@ pipeline {
             
             echo "✅ Pre-deployment validation completed successfully!"
             echo "🚀 Ready to proceed with sequential deployment stages"
+            
+            # Ensure clean exit
+            exit 0
           '''
         }
         script {
