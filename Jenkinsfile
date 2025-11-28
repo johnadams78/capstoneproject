@@ -627,28 +627,25 @@ pipeline {
             
             echo "⏳ Verifying Web Tier deployment..."
             
-            # Get ALB details and wait for it to be active
-            ALB_NAME="capstoneproject-alb"
-            echo "⏳ Waiting for Load Balancer: $ALB_NAME"
+            # Get ELB details and wait for it to be active
+            ELB_NAME="capstoneproject-elb"
+            echo "⏳ Waiting for Classic Load Balancer: $ELB_NAME"
             
             for i in {1..10}; do
-              ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "")
-              if [ ! -z "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
+              ELB_DNS=$(aws elb describe-load-balancers --load-balancer-names $ELB_NAME --query 'LoadBalancerDescriptions[0].DNSName' --output text 2>/dev/null || echo "")
+              if [ ! -z "$ELB_DNS" ] && [ "$ELB_DNS" != "None" ]; then
                 break
               fi
-              echo "Waiting for ALB to be created... ($i/10)"
+              echo "Waiting for ELB to be created... ($i/10)"
               sleep 15
             done
             
-            echo "🔍 ALB ARN: $ALB_ARN"
+            echo "🔍 ELB DNS: $ELB_DNS"
             
-            # Wait for load balancer to be active
-            echo "⏳ Waiting for Load Balancer to become active..."
-            aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
+            # Get ELB health check status
+            ELB_STATE=$(aws elb describe-instance-health --load-balancer-name $ELB_NAME --query 'InstanceStates[0].State' --output text 2>/dev/null || echo "Unknown")
             
-            # Get ALB status and DNS
-            ALB_STATE=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].State.Code' --output text)
-            ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
+            echo "🔍 ELB Initial State: $ELB_STATE"
             
             echo "🔍 ALB State: $ALB_STATE"
             echo "🔍 ALB DNS: $ALB_DNS"
@@ -681,10 +678,10 @@ pipeline {
             
             # Get web URLs from terraform output
             WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo "")
-            ALB_DNS_OUTPUT=$(terraform output -raw web_alb_dns 2>/dev/null || echo "")
+            ELB_DNS_OUTPUT=$(terraform output -raw web_alb_dns 2>/dev/null || echo "")
             
             echo "🔍 Web URL: $WEB_URL"
-            echo "🔍 ALB DNS (from output): $ALB_DNS_OUTPUT"
+            echo "🔍 ELB DNS (from output): $ELB_DNS_OUTPUT"
             
             # Test web application accessibility
             if [ ! -z "$WEB_URL" ] && [ "$WEB_URL" != "null" ]; then
@@ -701,11 +698,11 @@ pipeline {
             fi
             
             # Final verification
-            if [ "$ALB_STATE" = "active" ] && [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
+            if [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
               echo "✅ Web tier deployed and verified successfully!"
               echo "📊 Summary:"
-              echo "   - Load Balancer: $ALB_NAME ($ALB_STATE)"
-              echo "   - ALB DNS: $ALB_DNS"
+              echo "   - Load Balancer: $ELB_NAME"
+              echo "   - ELB DNS: $ELB_DNS"
               echo "   - Auto Scaling Group: $ASG_NAME"
               echo "   - Healthy Instances: $HEALTHY_COUNT"
               echo "   - InService Instances: $INSERVICE_COUNT"
@@ -717,7 +714,6 @@ pipeline {
               fi
             else
               echo "❌ Web tier verification failed - initiating cleanup"
-              echo "ALB State: $ALB_STATE"
               echo "Healthy Count: $HEALTHY_COUNT"
               echo "InService Count: $INSERVICE_COUNT"
               echo "Web URL: $WEB_URL"

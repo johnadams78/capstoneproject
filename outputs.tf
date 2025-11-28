@@ -8,12 +8,12 @@ output "public_subnets" {
 
 # Web Tier Outputs
 output "web_alb_dns" {
-  value = var.deploy_web ? module.web[0].alb_dns : ""
-  description = "DNS name of the Application Load Balancer"
+  value = var.deploy_web ? module.web[0].elb_dns : ""
+  description = "DNS name of the Classic Load Balancer"
 }
 
 output "web_url" {
-  value = var.deploy_web ? "http://${module.web[0].alb_dns}" : ""
+  value = var.deploy_web ? "http://${module.web[0].elb_dns}" : ""
   description = "URL to access the web application"
 }
 

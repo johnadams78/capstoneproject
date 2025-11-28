@@ -7,9 +7,9 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-resource "aws_security_group" "alb_sg" {
-  name        = "${var.project_name}-alb-sg"
-  description = "Allow public HTTP/HTTPS to ALB"
+resource "aws_security_group" "elb_sg" {
+  name        = "${var.project_name}-elb-sg"
+  description = "Allow public HTTP/HTTPS to Classic Load Balancer"
   vpc_id      = var.vpc_id
 
   ingress {
@@ -34,14 +34,14 @@ resource "aws_security_group" "alb_sg" {
 
 resource "aws_security_group" "instance_sg" {
   name        = "${var.project_name}-app-sg"
-  description = "Allow HTTP from ALB to instances"
+  description = "Allow HTTP from ELB to instances"
   vpc_id      = var.vpc_id
 
   ingress {
     from_port                = 80
     to_port                  = 80
     protocol                 = "tcp"
-    security_groups          = [aws_security_group.alb_sg.id]
+    security_groups          = [aws_security_group.elb_sg.id]
   }
   egress {
     from_port   = 0
@@ -51,31 +51,34 @@ resource "aws_security_group" "instance_sg" {
   }
 }
 
-resource "aws_lb" "alb" {
-  name               = "${var.project_name}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  subnets            = var.public_subnets
-  security_groups    = [aws_security_group.alb_sg.id]
-}
+# Classic Load Balancer (ELB)
+resource "aws_elb" "web_elb" {
+  name            = "${var.project_name}-elb"
+  subnets         = var.public_subnets
+  security_groups = [aws_security_group.elb_sg.id]
 
-resource "aws_lb_target_group" "tg" {
-  name     = "${var.project_name}-tg"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
-  health_check {
-    path = "/"
+  listener {
+    instance_port     = 80
+    instance_protocol = "http"
+    lb_port           = 80
+    lb_protocol       = "http"
   }
-}
 
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.alb.arn
-  port              = "80"
-  protocol          = "HTTP"
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.tg.arn
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 3
+    target              = "HTTP:80/"
+    interval            = 30
+  }
+
+  cross_zone_load_balancing   = true
+  idle_timeout                = 400
+  connection_draining         = true
+  connection_draining_timeout = 400
+
+  tags = {
+    Name = "${var.project_name}-elb"
   }
 }
 
@@ -434,7 +437,7 @@ resource "aws_autoscaling_group" "web_asg" {
     id      = aws_launch_template.web_lt.id
     version = "$Latest"
   }
-  target_group_arns = [aws_lb_target_group.tg.arn]
+  load_balancers    = [aws_elb.web_elb.name]
   health_check_type = "ELB"
   tag {
     key                 = "Name"
@@ -443,6 +446,6 @@ resource "aws_autoscaling_group" "web_asg" {
   }
 }
 
-output "alb_dns" { value = aws_lb.alb.dns_name }
+output "elb_dns" { value = aws_elb.web_elb.dns_name }
 output "web_sg_id" { value = aws_security_group.instance_sg.id }
-output "alb_sg_id" { value = aws_security_group.alb_sg.id }
+output "elb_sg_id" { value = aws_security_group.elb_sg.id }
