@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Name prefix for resources"
   type        = string
-  default     = "lifesci-app"
+  default     = "capstoneproject"
 }
 
 variable "vpc_cidr" {
@@ -28,11 +28,24 @@ variable "private_subnets" {
   default     = ["10.0.10.0/24","10.0.11.0/24"]
 }
 
-variable "web_min" { type = number, default = 2 }
-variable "web_max" { type = number, default = 3 }
+variable "web_min" {
+  type    = number
+  default = 2
+}
+
+variable "web_max" {
+  type    = number
+  default = 3
+}
 
 variable "web_instance_type" {
   description = "EC2 instance type for web servers (keep minimal CPU/mem)"
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "instance_type" {
+  description = "EC2 instance type for simple deployment"
   type        = string
   default     = "t3.micro"
 }
@@ -49,9 +62,15 @@ variable "db_engine" {
   default     = "aurora-mysql"
 }
 
-variable "db_name" { type = string, default = "lifesci" }
+variable "db_name" {
+  type    = string
+  default = "capstoneproject"
+}
 
-variable "db_master_username" { type = string, default = "dbadmin" }
+variable "db_master_username" {
+  type    = string
+  default = "dbadmin"
+}
 
 variable "db_master_password" {
   type        = string

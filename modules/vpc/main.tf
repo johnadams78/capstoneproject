@@ -24,14 +24,14 @@ resource "aws_subnet" "private" {
 }
 
 resource "aws_eip" "nat" {
-  vpc = true
+  domain     = "vpc"
   depends_on = [aws_internet_gateway.igw]
   tags = { Name = "${var.project_name}-nat-eip" }
 }
 
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat.id
-  subnet_id     = element(values(aws_subnet.public).*id, 0)
+  subnet_id     = element(values(aws_subnet.public), 0).id
   tags = { Name = "${var.project_name}-nat" }
 }
 
@@ -66,5 +66,11 @@ resource "aws_route_table_association" "private_assoc" {
 }
 
 output "vpc_id" { value = aws_vpc.this.id }
-output "public_subnet_ids" { value = values(aws_subnet.public).*id }
-output "private_subnet_ids" { value = values(aws_subnet.private).*id }
+
+output "public_subnet_ids" {
+  value = [for s in values(aws_subnet.public) : s.id]
+}
+
+output "private_subnet_ids" {
+  value = [for s in values(aws_subnet.private) : s.id]
+}

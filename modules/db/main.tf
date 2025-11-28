@@ -11,17 +11,6 @@ resource "aws_security_group" "db_sg" {
   }
 }
 
-# Allow access from web security group if provided
-resource "aws_security_group_rule" "allow_from_web" {
-  count = length(var.web_sg_id) > 0 ? 1 : 0
-  type              = "ingress"
-  from_port         = 3306
-  to_port           = 3306
-  protocol          = "tcp"
-  security_group_id = aws_security_group.db_sg.id
-  source_security_group_id = var.web_sg_id
-}
-
 # Aurora Serverless v2 cluster
 resource "aws_rds_cluster" "aurora_cluster" {
   cluster_identifier = "${var.project_name}-cluster"
@@ -35,14 +24,19 @@ resource "aws_rds_cluster" "aurora_cluster" {
 
   # If serverless flag is set, configure engine mode and scaling config
   lifecycle {
-    ignore_changes = [""]
+    ignore_changes = []
   }
 }
 
-# Note: To enable Aurora Serverless v2 you may need to use provider features
-# like `serverlessv2_scaling_configuration`. This scaffold leaves the cluster
-# in a basic state — you can enable serverless scaling in this resource
-# based on provider/version and your needs.
+# Aurora cluster instance
+resource "aws_rds_cluster_instance" "aurora_instance" {
+  count              = 1
+  identifier         = "${var.project_name}-instance-${count.index}"
+  cluster_identifier = aws_rds_cluster.aurora_cluster.id
+  instance_class     = "db.r5.large"
+  engine             = aws_rds_cluster.aurora_cluster.engine
+  engine_version     = aws_rds_cluster.aurora_cluster.engine_version
+}
 
 resource "aws_db_subnet_group" "db_subnets" {
   name       = "${var.project_name}-db-subnet-group"
