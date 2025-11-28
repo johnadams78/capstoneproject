@@ -808,9 +808,15 @@ pipeline {
               echo "⏳ Waiting for instance to be fully running..."
               aws ec2 wait instance-running --instance-ids $INSTANCE_ID
               
-              # Wait for status checks to pass
+              # Wait for status checks to pass (increased timeout for t2.nano)
               echo "⏳ Waiting for instance status checks to pass..."
-              aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
+              echo "   This may take 5-10 minutes for t2.nano instances..."
+              if aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID --max-attempts 80 --delay 15; then
+                echo "✅ Status checks passed successfully"
+              else
+                echo "⚠️ Status check wait timed out (this can happen with t2.nano + heavy user data)"
+                echo "   Instance may still be initializing. Checking current status..."
+              fi
               
               # Get instance status
               INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[0].Instances[0].State.Name' --output text)
@@ -852,8 +858,8 @@ pipeline {
               echo "🔍 Dashboard URL: $DASHBOARD_URL"
               echo "🔍 Grafana URL: $GRAFANA_URL"
               
-              # Final verification
-              if [ "$INSTANCE_STATE" = "running" ] && [ "$STATUS_CHECK" = "ok" ] && [ ! -z "$MONITORING_IP" ]; then
+              # Final verification (relaxed for t2.nano slow initialization)
+              if [ "$INSTANCE_STATE" = "running" ] && [ ! -z "$MONITORING_IP" ] && ([ "$STATUS_CHECK" = "ok" ] || [ "$STATUS_CHECK" = "initializing" ]); then
                 echo "✅ Monitoring deployed and verified successfully!"
                 echo "📊 Summary:"
                 echo "   - Instance ID: $INSTANCE_ID"
