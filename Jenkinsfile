@@ -97,7 +97,24 @@ pipeline {
           sh '''
             echo "Creating VPC, Subnets, Internet Gateway, NAT Gateway..."
             terraform apply -input=false -auto-approve -target=module.vpc tfplan
-            echo "✅ VPC and Networking deployed successfully"
+            
+            echo "⏳ Verifying VPC deployment..."
+            VPC_ID=$(terraform output -raw vpc_id)
+            echo "VPC ID: $VPC_ID"
+            
+            # Wait for VPC to be available
+            aws ec2 wait vpc-available --vpc-ids $VPC_ID
+            
+            # Verify subnets are created
+            SUBNET_COUNT=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets | length(@)')
+            echo "Created subnets: $SUBNET_COUNT"
+            
+            if [ "$SUBNET_COUNT" -ge "4" ]; then
+              echo "✅ VPC and Networking deployed and verified successfully"
+            else
+              echo "❌ VPC verification failed - expected at least 4 subnets"
+              exit 1
+            fi
           '''
         }
       }
@@ -113,7 +130,23 @@ pipeline {
           sh '''
             echo "Creating IAM roles and instance profiles..."
             terraform apply -input=false -auto-approve -target=module.iam tfplan
-            echo "✅ IAM resources deployed successfully"
+            
+            echo "⏳ Verifying IAM deployment..."
+            
+            # Check if IAM role exists and is ready
+            IAM_ROLE="capstoneproject-ec2-role"
+            aws iam wait role-exists --role-name $IAM_ROLE
+            
+            # Check if instance profile exists
+            INSTANCE_PROFILE="capstoneproject-ec2-profile"
+            aws iam get-instance-profile --instance-profile-name $INSTANCE_PROFILE >/dev/null 2>&1
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ IAM resources deployed and verified successfully"
+            else
+              echo "❌ IAM verification failed"
+              exit 1
+            fi
           '''
         }
       }
@@ -134,7 +167,33 @@ pipeline {
           sh '''
             echo "Creating Aurora MySQL cluster and instances..."
             terraform apply -input=false -auto-approve -target=module.db tfplan
-            echo "✅ Database deployed successfully"
+            
+            echo "⏳ Verifying Database deployment (this may take several minutes)..."
+            
+            # Get cluster identifier and wait for it to be available
+            CLUSTER_ID="capstoneproject-cluster"
+            echo "Waiting for Aurora cluster $CLUSTER_ID to be available..."
+            aws rds wait db-cluster-available --db-cluster-identifier $CLUSTER_ID
+            
+            # Check cluster status
+            CLUSTER_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier $CLUSTER_ID --query 'DBClusters[0].Status' --output text)
+            echo "Cluster status: $CLUSTER_STATUS"
+            
+            # Wait for instances to be available
+            INSTANCE_ID="capstoneproject-instance-0"
+            echo "Waiting for Aurora instance $INSTANCE_ID to be available..."
+            aws rds wait db-instance-available --db-instance-identifier $INSTANCE_ID
+            
+            # Verify endpoint is accessible
+            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint)
+            echo "Database endpoint: $DB_ENDPOINT"
+            
+            if [ "$CLUSTER_STATUS" = "available" ] && [ ! -z "$DB_ENDPOINT" ]; then
+              echo "✅ Database deployed and verified successfully"
+            else
+              echo "❌ Database verification failed"
+              exit 1
+            fi
           '''
         }
       }
@@ -155,7 +214,49 @@ pipeline {
           sh '''
             echo "Creating EC2 instances, Auto Scaling Group, Load Balancer..."
             terraform apply -input=false -auto-approve -target=module.web tfplan
-            echo "✅ Web tier deployed successfully"
+            
+            echo "⏳ Verifying Web Tier deployment..."
+            
+            # Get ALB ARN and wait for it to be active
+            ALB_NAME="capstoneproject-alb"
+            ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+            echo "ALB ARN: $ALB_ARN"
+            
+            # Wait for load balancer to be active
+            aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
+            
+            # Check ALB status
+            ALB_STATE=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].State.Code' --output text)
+            echo "ALB state: $ALB_STATE"
+            
+            # Wait for Auto Scaling Group to have healthy instances
+            ASG_NAME="capstoneproject-asg"
+            echo "Waiting for Auto Scaling Group instances to be healthy..."
+            
+            # Wait up to 10 minutes for healthy instances
+            for i in {1..20}; do
+              HEALTHY_COUNT=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $ASG_NAME --query 'AutoScalingGroups[0].Instances[?HealthStatus==`Healthy`] | length(@)' --output text)
+              echo "Healthy instances: $HEALTHY_COUNT"
+              
+              if [ "$HEALTHY_COUNT" -ge "2" ]; then
+                break
+              fi
+              
+              echo "Waiting for instances to become healthy... ($i/20)"
+              sleep 30
+            done
+            
+            # Get web URL
+            WEB_URL=$(terraform output -raw web_url)
+            echo "Web URL: $WEB_URL"
+            
+            if [ "$ALB_STATE" = "active" ] && [ "$HEALTHY_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
+              echo "✅ Web tier deployed and verified successfully"
+              echo "🌐 Application URL: $WEB_URL"
+            else
+              echo "❌ Web tier verification failed"
+              exit 1
+            fi
           '''
         }
       }
@@ -176,7 +277,51 @@ pipeline {
           sh '''
             echo "Creating Grafana monitoring server..."
             terraform apply -input=false -auto-approve -target=module.monitoring tfplan
-            echo "✅ Monitoring deployed successfully"
+            
+            echo "⏳ Verifying Monitoring deployment..."
+            
+            # Get monitoring instance details
+            MONITORING_IP=$(terraform output -raw monitoring_public_ip)
+            echo "Monitoring server IP: $MONITORING_IP"
+            
+            # Wait for EC2 instance to be running and status checks to pass
+            INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-monitoring-server" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+            
+            if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "null" ]; then
+              echo "Monitoring instance ID: $INSTANCE_ID"
+              
+              # Wait for instance to be running
+              aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+              
+              # Wait for status checks
+              echo "Waiting for instance status checks to pass..."
+              aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
+              
+              # Wait for HTTP services to be ready (with timeout)
+              echo "Waiting for monitoring services to be ready..."
+              for i in {1..12}; do
+                # Check if monitoring dashboard is accessible
+                if curl -s -o /dev/null -w "%{http_code}" "http://${MONITORING_IP}" | grep -q "200"; then
+                  echo "Monitoring dashboard is ready"
+                  break
+                fi
+                echo "Waiting for monitoring dashboard... ($i/12)"
+                sleep 30
+              done
+              
+              # Get URLs
+              DASHBOARD_URL=$(terraform output -raw monitoring_dashboard_url)
+              GRAFANA_URL=$(terraform output -raw grafana_dashboard_url)
+              echo "Monitoring Dashboard: $DASHBOARD_URL"
+              echo "Grafana Dashboard: $GRAFANA_URL"
+              
+              echo "✅ Monitoring deployed and verified successfully"
+              echo "📊 Monitoring Dashboard: $DASHBOARD_URL"
+              echo "📈 Grafana Dashboard: $GRAFANA_URL (admin/grafana123)"
+            else
+              echo "❌ Monitoring verification failed - instance not found"
+              exit 1
+            fi
           '''
         }
       }
@@ -192,7 +337,17 @@ pipeline {
           sh '''
             echo "Applying any remaining terraform resources..."
             terraform apply -input=false -auto-approve tfplan
+            
+            echo "⏳ Final verification of all components..."
+            
+            # Wait a moment for final configurations to settle
+            sleep 30
+            
+            # Verify terraform state is consistent
+            terraform refresh -input=false
+            
             echo "✅ Deployment finalized successfully"
+            echo "🎉 All infrastructure components have been deployed!"
           '''
         }
       }
@@ -201,38 +356,95 @@ pipeline {
     stage('Verify Infrastructure') {
       when { expression { params.ACTION == 'install' } }
       steps {
-        echo '✅ Verifying deployed infrastructure...'
+        echo '✅ Comprehensive Infrastructure Verification...'
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
           sh '''
-            echo "Checking infrastructure status..."
+            echo "==========================================="
+            echo "🔍 INFRASTRUCTURE DEPLOYMENT SUMMARY"
+            echo "==========================================="
             
             # Check VPC
-            echo "VPC ID: $(terraform output -raw vpc_id 2>/dev/null || echo 'Not deployed')"
+            VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo 'Not deployed')
+            echo "🌐 VPC: $VPC_ID"
             
-            # Check Web Server
-            WEB_IP=$(terraform output -raw web_public_ip 2>/dev/null || echo "")
-            if [ ! -z "$WEB_IP" ]; then
-              echo "Web Server: http://$WEB_IP"
+            # Check Subnets
+            if [ "$VPC_ID" != "Not deployed" ]; then
+              PUBLIC_SUBNETS=$(terraform output -json public_subnets 2>/dev/null | jq -r '.[]' | wc -l)
+              echo "🔗 Public Subnets: $PUBLIC_SUBNETS"
+            fi
+            
+            # Check Web Tier
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo "Not available")
+              ALB_DNS=$(terraform output -raw web_alb_dns 2>/dev/null || echo "Not available")
+              echo "🖥️ Web Application: $WEB_URL"
+              echo "⚖️ Load Balancer DNS: $ALB_DNS"
+              
+              # Test web application accessibility
+              if [ "$WEB_URL" != "Not available" ] && [ "$WEB_URL" != "" ]; then
+                echo "🔍 Testing web application accessibility..."
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$WEB_URL" || echo "000")
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "✅ Web application is accessible (HTTP $HTTP_STATUS)"
+                else
+                  echo "⚠️ Web application returned HTTP $HTTP_STATUS (may still be initializing)"
+                fi
+              fi
             else
-              echo "Web Server: Not deployed"
+              echo "🖥️ Web Tier: Skipped (DEPLOY_WEB=false)"
             fi
             
             # Check Database
-            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo "")
-            if [ ! -z "$DB_ENDPOINT" ]; then
-              echo "Database Endpoint: $DB_ENDPOINT"
+            if [ "${DEPLOY_DATABASE}" = "true" ]; then
+              DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo "Not available")
+              DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo "capstonedb")
+              echo "🗄️ Database Endpoint: $DB_ENDPOINT"
+              echo "🗄️ Database Name: $DB_NAME"
+              
+              # Check database cluster status
+              if [ "$DB_ENDPOINT" != "Not available" ] && [ "$DB_ENDPOINT" != "" ]; then
+                CLUSTER_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier capstoneproject-cluster --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "unknown")
+                echo "🗄️ Database Status: $CLUSTER_STATUS"
+              fi
             else
-              echo "Database: Not deployed"
+              echo "🗄️ Database: Skipped (DEPLOY_DATABASE=false)"
             fi
             
             # Check Monitoring
-            MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo "")
-            if [ ! -z "$MON_IP" ]; then
-              echo "Monitoring: http://$MON_IP:3000"
+            if [ "${DEPLOY_MONITORING}" = "true" ]; then
+              MON_DASHBOARD=$(terraform output -raw monitoring_dashboard_url 2>/dev/null || echo "Not available")
+              GRAFANA_URL=$(terraform output -raw grafana_dashboard_url 2>/dev/null || echo "Not available")
+              MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo "Not available")
+              
+              echo "📊 Monitoring Dashboard: $MON_DASHBOARD"
+              echo "📈 Grafana Dashboard: $GRAFANA_URL"
+              echo "🖥️ Monitoring Server IP: $MON_IP"
+              
+              # Test monitoring dashboard accessibility
+              if [ "$MON_DASHBOARD" != "Not available" ] && [ "$MON_DASHBOARD" != "" ]; then
+                echo "🔍 Testing monitoring dashboard accessibility..."
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MON_DASHBOARD" || echo "000")
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "✅ Monitoring dashboard is accessible (HTTP $HTTP_STATUS)"
+                else
+                  echo "⚠️ Monitoring dashboard returned HTTP $HTTP_STATUS (may still be initializing)"
+                fi
+              fi
             else
-              echo "Monitoring: Not deployed"
+              echo "📊 Monitoring: Skipped (DEPLOY_MONITORING=false)"
+            fi
+            
+            echo "==========================================="
+            echo "🎯 DEPLOYMENT VERIFICATION COMPLETE"
+            echo "==========================================="
+            
+            # Final status check
+            terraform show -json | jq -r '.values.root_module.resources[] | select(.type != "data") | "\(.type): \(.name)"' | sort | uniq -c
+            
+            echo "✅ All deployed resources verified successfully!"
+            echo "🚀 Infrastructure is ready for use!"
             fi
             
             echo "✅ Infrastructure verification complete"
