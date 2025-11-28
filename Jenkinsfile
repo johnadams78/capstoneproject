@@ -260,6 +260,8 @@ pipeline {
             // If we reach here, validation succeeded
             env.PLAN_VALIDATED = 'true'
             echo "✅ Validation successful - deployment stages will proceed"
+            echo "DEBUG: env.PLAN_VALIDATED is now set to: '${env.PLAN_VALIDATED}'"
+            echo "DEBUG: Type check: ${env.PLAN_VALIDATED == 'true'}"
             
           } catch (Exception e) {
             env.PLAN_VALIDATED = 'false'
@@ -280,8 +282,10 @@ pipeline {
       }
       steps {
         echo "🌐 Deploying VPC and Networking..."
-        echo "DEBUG: ACTION parameter value: ${params.ACTION}"
-        echo "DEBUG: Should execute VPC stage: ${params.ACTION == 'install'}"
+        echo "DEBUG: env.PLAN_VALIDATED value: '${env.PLAN_VALIDATED}'"
+        echo "DEBUG: params.ACTION value: '${params.ACTION}'"
+        echo "DEBUG: PLAN_VALIDATED == 'true': ${env.PLAN_VALIDATED == 'true'}"
+        echo "DEBUG: ACTION == 'install': ${params.ACTION == 'install'}"
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
