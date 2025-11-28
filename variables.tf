@@ -30,18 +30,18 @@ variable "private_subnets" {
 
 variable "web_min" {
   type    = number
-  default = 2
+  default = 1
 }
 
 variable "web_max" {
   type    = number
-  default = 3
+  default = 1
 }
 
 variable "web_instance_type" {
   description = "EC2 instance type for web servers (keep minimal CPU/mem)"
   type        = string
-  default     = "t2.nano"
+  default     = "t3.micro"
 }
 
 variable "instance_type" {

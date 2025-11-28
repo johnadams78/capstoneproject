@@ -608,10 +608,9 @@ pipeline {
             echo "=========================================="
             
             echo "🚀 Creating Web Tier infrastructure..."
-            echo "- Application Load Balancer"
-            echo "- Auto Scaling Group (2-3 instances)"
-            echo "- Launch Template (t2.nano)"
-            echo "- Target Groups"
+            echo "- Classic Load Balancer"
+            echo "- Auto Scaling Group (1 instance)"
+            echo "- Launch Template (t3.micro)"
             echo "- Security Groups"
             echo "- Car Dealership Application"
             
@@ -663,7 +662,7 @@ pipeline {
               
               echo "   Progress: $i/30 - Total: $TOTAL_INSTANCES, Healthy: $HEALTHY_COUNT, InService: $INSERVICE_COUNT"
               
-              if [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ]; then
+              if [ "$HEALTHY_COUNT" -ge "1" ] && [ "$INSERVICE_COUNT" -ge "1" ]; then
                 break
               fi
               
