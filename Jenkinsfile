@@ -378,7 +378,7 @@ pipeline {
             echo "     └─ Grafana dashboards and logs"
             echo ""
             echo "  🌍 VPC and ALL Networking Components"
-            echo "     ├─ NAT Gateway (~$32/month)"
+            echo "     ├─ NAT Gateway (~\$32/month)"
             echo "     ├─ Elastic IPs"
             echo "     ├─ Public/Private Subnets"
             echo "     ├─ Route Tables & Internet Gateway"
