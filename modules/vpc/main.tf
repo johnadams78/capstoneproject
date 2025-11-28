@@ -1,3 +1,10 @@
+# Get availability zones, excluding us-east-1e which doesn't support t3.micro
+data "aws_availability_zones" "available" {
+  state = "available"
+  exclude_names = ["us-east-1e"]
+  exclude_zone_ids = []
+}
+
 resource "aws_vpc" "this" {
   cidr_block = var.vpc_cidr
   tags = { Name = "${var.project_name}-vpc" }
@@ -12,6 +19,7 @@ resource "aws_subnet" "public" {
   for_each = toset(var.public_subnet_cidrs)
   vpc_id            = aws_vpc.this.id
   cidr_block        = each.value
+  availability_zone = data.aws_availability_zones.available.names[index(var.public_subnet_cidrs, each.value)]
   map_public_ip_on_launch = true
   tags = { Name = "${var.project_name}-public-${each.key}" }
 }
@@ -20,6 +28,7 @@ resource "aws_subnet" "private" {
   for_each = toset(var.private_subnet_cidrs)
   vpc_id     = aws_vpc.this.id
   cidr_block = each.value
+  availability_zone = data.aws_availability_zones.available.names[index(var.private_subnet_cidrs, each.value)]
   tags = { Name = "${var.project_name}-private-${each.key}" }
 }
 
@@ -73,4 +82,8 @@ output "public_subnet_ids" {
 
 output "private_subnet_ids" {
   value = [for s in values(aws_subnet.private) : s.id]
+}
+
+output "availability_zones" {
+  value = data.aws_availability_zones.available.names
 }
