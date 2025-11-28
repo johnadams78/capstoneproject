@@ -95,24 +95,90 @@ pipeline {
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
           sh '''
-            echo "Creating VPC, Subnets, Internet Gateway, NAT Gateway..."
-            terraform apply -input=false -auto-approve -target=module.vpc tfplan
+            echo "=========================================="
+            echo "STAGE 1/5: VPC AND NETWORKING DEPLOYMENT"
+            echo "=========================================="
+            
+            echo "🚀 Creating VPC infrastructure..."
+            echo "- VPC (10.0.0.0/16)"
+            echo "- Public Subnets (2x)"
+            echo "- Private Subnets (2x)"  
+            echo "- Internet Gateway"
+            echo "- NAT Gateway"
+            echo "- Route Tables"
+            
+            # Create separate plan for VPC only
+            terraform plan -target=module.vpc \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -out=vpc-plan.tfplan
+            
+            echo "⏳ Applying VPC configuration..."
+            terraform apply -input=false -auto-approve vpc-plan.tfplan
             
             echo "⏳ Verifying VPC deployment..."
-            VPC_ID=$(terraform output -raw vpc_id)
-            echo "VPC ID: $VPC_ID"
+            
+            # Get VPC ID with retry logic
+            for i in {1..5}; do
+              VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo "")
+              if [ ! -z "$VPC_ID" ] && [ "$VPC_ID" != "null" ]; then
+                break
+              fi
+              echo "Waiting for VPC ID to be available... ($i/5)"
+              sleep 10
+            done
+            
+            echo "🔍 VPC ID: $VPC_ID"
+            
+            if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "null" ]; then
+              echo "❌ Failed to get VPC ID"
+              exit 1
+            fi
             
             # Wait for VPC to be available
+            echo "⏳ Waiting for VPC to be fully available..."
             aws ec2 wait vpc-available --vpc-ids $VPC_ID
             
-            # Verify subnets are created
-            SUBNET_COUNT=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets | length(@)')
-            echo "Created subnets: $SUBNET_COUNT"
+            # Verify all subnets are created and available
+            echo "⏳ Verifying subnets..."
+            for i in {1..12}; do
+              SUBNET_COUNT=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets | length(@)')
+              PUBLIC_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=map-public-ip-on-launch,Values=true" --query 'Subnets | length(@)')
+              PRIVATE_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=map-public-ip-on-launch,Values=false" --query 'Subnets | length(@)')
+              
+              echo "Total subnets: $SUBNET_COUNT (Public: $PUBLIC_SUBNETS, Private: $PRIVATE_SUBNETS)"
+              
+              if [ "$SUBNET_COUNT" -ge "4" ] && [ "$PUBLIC_SUBNETS" -ge "2" ] && [ "$PRIVATE_SUBNETS" -ge "2" ]; then
+                break
+              fi
+              
+              echo "Waiting for all subnets to be created... ($i/12)"
+              sleep 15
+            done
             
-            if [ "$SUBNET_COUNT" -ge "4" ]; then
-              echo "✅ VPC and Networking deployed and verified successfully"
+            # Verify Internet Gateway and NAT Gateway
+            echo "⏳ Verifying gateways..."
+            IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text)
+            NAT_COUNT=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --query 'NatGateways | length(@)')
+            
+            echo "🔍 Internet Gateway: $IGW_ID"
+            echo "🔍 NAT Gateways: $NAT_COUNT"
+            
+            # Final verification
+            if [ "$SUBNET_COUNT" -ge "4" ] && [ "$PUBLIC_SUBNETS" -ge "2" ] && [ "$PRIVATE_SUBNETS" -ge "2" ] && [ "$IGW_ID" != "None" ] && [ "$NAT_COUNT" -ge "1" ]; then
+              echo "✅ VPC and Networking deployed and verified successfully!"
+              echo "📊 Summary:"
+              echo "   - VPC ID: $VPC_ID"
+              echo "   - Total Subnets: $SUBNET_COUNT"
+              echo "   - Public Subnets: $PUBLIC_SUBNETS" 
+              echo "   - Private Subnets: $PRIVATE_SUBNETS"
+              echo "   - Internet Gateway: $IGW_ID"
+              echo "   - NAT Gateways: $NAT_COUNT"
             else
-              echo "❌ VPC verification failed - expected at least 4 subnets"
+              echo "❌ VPC verification failed"
+              echo "Expected: 4+ subnets (2+ public, 2+ private), 1+ IGW, 1+ NAT"
+              echo "Got: $SUBNET_COUNT subnets ($PUBLIC_SUBNETS public, $PRIVATE_SUBNETS private), IGW: $IGW_ID, NAT: $NAT_COUNT"
               exit 1
             fi
           '''
@@ -128,23 +194,70 @@ pipeline {
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
           sh '''
-            echo "Creating IAM roles and instance profiles..."
-            terraform apply -input=false -auto-approve -target=module.iam tfplan
+            echo "=========================================="
+            echo "STAGE 2/5: IAM ROLES AND POLICIES"
+            echo "=========================================="
+            
+            echo "🚀 Creating IAM resources..."
+            echo "- EC2 Service Role"
+            echo "- EC2 Instance Profile"
+            echo "- SSM Managed Instance Core Policy"
+            
+            # Create separate plan for IAM only
+            terraform plan -target=module.iam \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -out=iam-plan.tfplan
+            
+            echo "⏳ Applying IAM configuration..."
+            terraform apply -input=false -auto-approve iam-plan.tfplan
             
             echo "⏳ Verifying IAM deployment..."
             
-            # Check if IAM role exists and is ready
+            # Wait for IAM role to exist and be ready
             IAM_ROLE="capstoneproject-ec2-role"
+            echo "⏳ Waiting for IAM role: $IAM_ROLE"
             aws iam wait role-exists --role-name $IAM_ROLE
             
-            # Check if instance profile exists
-            INSTANCE_PROFILE="capstoneproject-ec2-profile"
-            aws iam get-instance-profile --instance-profile-name $INSTANCE_PROFILE >/dev/null 2>&1
+            # Get role details
+            ROLE_ARN=$(aws iam get-role --role-name $IAM_ROLE --query 'Role.Arn' --output text 2>/dev/null || echo "")
+            echo "🔍 Role ARN: $ROLE_ARN"
             
-            if [ $? -eq 0 ]; then
-              echo "✅ IAM resources deployed and verified successfully"
+            # Wait for instance profile to exist
+            INSTANCE_PROFILE="capstoneproject-ec2-profile"
+            echo "⏳ Waiting for instance profile: $INSTANCE_PROFILE"
+            
+            for i in {1..6}; do
+              if aws iam get-instance-profile --instance-profile-name $INSTANCE_PROFILE >/dev/null 2>&1; then
+                break
+              fi
+              echo "Waiting for instance profile to be ready... ($i/6)"
+              sleep 10
+            done
+            
+            # Verify instance profile details
+            PROFILE_ARN=$(aws iam get-instance-profile --instance-profile-name $INSTANCE_PROFILE --query 'InstanceProfile.Arn' --output text 2>/dev/null || echo "")
+            echo "🔍 Instance Profile ARN: $PROFILE_ARN"
+            
+            # Verify role has the required policy attached
+            ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name $IAM_ROLE --query 'AttachedPolicies | length(@)')
+            echo "🔍 Attached Policies: $ATTACHED_POLICIES"
+            
+            # Final verification
+            if [ ! -z "$ROLE_ARN" ] && [ ! -z "$PROFILE_ARN" ] && [ "$ATTACHED_POLICIES" -gt "0" ]; then
+              echo "✅ IAM resources deployed and verified successfully!"
+              echo "📊 Summary:"
+              echo "   - IAM Role: $IAM_ROLE"
+              echo "   - Role ARN: $ROLE_ARN"
+              echo "   - Instance Profile: $INSTANCE_PROFILE"  
+              echo "   - Profile ARN: $PROFILE_ARN"
+              echo "   - Attached Policies: $ATTACHED_POLICIES"
             else
               echo "❌ IAM verification failed"
+              echo "Role ARN: $ROLE_ARN"
+              echo "Profile ARN: $PROFILE_ARN" 
+              echo "Policies: $ATTACHED_POLICIES"
               exit 1
             fi
           '''
@@ -162,36 +275,88 @@ pipeline {
       steps {
         echo '🗄️ Deploying Aurora RDS Database (this takes ~5-7 minutes)...'
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
-            echo "Creating Aurora MySQL cluster and instances..."
-            terraform apply -input=false -auto-approve -target=module.db tfplan
+            echo "=========================================="
+            echo "STAGE 3/5: AURORA RDS DATABASE"
+            echo "=========================================="
             
-            echo "⏳ Verifying Database deployment (this may take several minutes)..."
+            echo "🚀 Creating Aurora RDS cluster..."
+            echo "- Aurora MySQL Cluster"
+            echo "- Database Instance (db.r5.large)"
+            echo "- Database Subnet Group"
+            echo "- Security Groups"
+            echo "- Database: capstonedb"
+            
+            # Create separate plan for database only  
+            terraform plan -target=module.db \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -out=database-plan.tfplan
+            
+            echo "⏳ Applying database configuration (this will take 5-7 minutes)..."
+            terraform apply -input=false -auto-approve database-plan.tfplan
+            
+            echo "⏳ Verifying Database deployment..."
             
             # Get cluster identifier and wait for it to be available
             CLUSTER_ID="capstoneproject-cluster"
-            echo "Waiting for Aurora cluster $CLUSTER_ID to be available..."
-            aws rds wait db-cluster-available --db-cluster-identifier $CLUSTER_ID
-            
-            # Check cluster status
-            CLUSTER_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier $CLUSTER_ID --query 'DBClusters[0].Status' --output text)
-            echo "Cluster status: $CLUSTER_STATUS"
-            
-            # Wait for instances to be available
             INSTANCE_ID="capstoneproject-instance-0"
-            echo "Waiting for Aurora instance $INSTANCE_ID to be available..."
+            
+            echo "⏳ Waiting for Aurora cluster $CLUSTER_ID to be available..."
+            echo "   This typically takes 5-7 minutes for Aurora cluster creation..."
+            
+            # Wait for cluster with timeout and progress updates
+            for i in {1..30}; do
+              CLUSTER_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier $CLUSTER_ID --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "not-found")
+              echo "   Progress: $i/30 - Cluster status: $CLUSTER_STATUS"
+              
+              if [ "$CLUSTER_STATUS" = "available" ]; then
+                break
+              fi
+              
+              if [ $i -eq 30 ]; then
+                echo "❌ Timeout waiting for cluster to be available"
+                exit 1
+              fi
+              
+              sleep 30
+            done
+            
+            echo "⏳ Waiting for Aurora instance $INSTANCE_ID to be available..."
             aws rds wait db-instance-available --db-instance-identifier $INSTANCE_ID
             
-            # Verify endpoint is accessible
-            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint)
-            echo "Database endpoint: $DB_ENDPOINT"
+            # Get final status and details
+            CLUSTER_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier $CLUSTER_ID --query 'DBClusters[0].Status' --output text)
+            INSTANCE_STATUS=$(aws rds describe-db-instances --db-instance-identifier $INSTANCE_ID --query 'DBInstances[0].DBInstanceStatus' --output text)
             
-            if [ "$CLUSTER_STATUS" = "available" ] && [ ! -z "$DB_ENDPOINT" ]; then
-              echo "✅ Database deployed and verified successfully"
+            # Get endpoints
+            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo "")
+            DB_NAME=$(terraform output -raw database_name 2>/dev/null || echo "capstonedb")
+            
+            echo "🔍 Cluster Status: $CLUSTER_STATUS"
+            echo "🔍 Instance Status: $INSTANCE_STATUS"
+            echo "🔍 Database Endpoint: $DB_ENDPOINT"
+            echo "🔍 Database Name: $DB_NAME"
+            
+            # Final verification
+            if [ "$CLUSTER_STATUS" = "available" ] && [ "$INSTANCE_STATUS" = "available" ] && [ ! -z "$DB_ENDPOINT" ]; then
+              echo "✅ Database deployed and verified successfully!"
+              echo "📊 Summary:"
+              echo "   - Cluster ID: $CLUSTER_ID"
+              echo "   - Instance ID: $INSTANCE_ID"
+              echo "   - Endpoint: $DB_ENDPOINT"
+              echo "   - Database: $DB_NAME"
+              echo "   - Status: Ready for connections"
             else
               echo "❌ Database verification failed"
+              echo "Cluster Status: $CLUSTER_STATUS"
+              echo "Instance Status: $INSTANCE_STATUS"
+              echo "Endpoint: $DB_ENDPOINT"
               exit 1
             fi
           '''
@@ -212,49 +377,124 @@ pipeline {
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
           sh '''
-            echo "Creating EC2 instances, Auto Scaling Group, Load Balancer..."
-            terraform apply -input=false -auto-approve -target=module.web tfplan
+            echo "=========================================="
+            echo "STAGE 4/5: WEB TIER DEPLOYMENT"
+            echo "=========================================="
+            
+            echo "🚀 Creating Web Tier infrastructure..."
+            echo "- Application Load Balancer"
+            echo "- Auto Scaling Group (2-3 instances)"
+            echo "- Launch Template (t3.micro)"
+            echo "- Target Groups"
+            echo "- Security Groups"
+            echo "- Car Dealership Application"
+            
+            # Create separate plan for web tier only
+            terraform plan -target=module.web \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -out=web-plan.tfplan
+            
+            echo "⏳ Applying web tier configuration..."
+            terraform apply -input=false -auto-approve web-plan.tfplan
             
             echo "⏳ Verifying Web Tier deployment..."
             
-            # Get ALB ARN and wait for it to be active
+            # Get ALB details and wait for it to be active
             ALB_NAME="capstoneproject-alb"
-            ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-            echo "ALB ARN: $ALB_ARN"
+            echo "⏳ Waiting for Load Balancer: $ALB_NAME"
+            
+            for i in {1..10}; do
+              ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "")
+              if [ ! -z "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
+                break
+              fi
+              echo "Waiting for ALB to be created... ($i/10)"
+              sleep 15
+            done
+            
+            echo "🔍 ALB ARN: $ALB_ARN"
             
             # Wait for load balancer to be active
+            echo "⏳ Waiting for Load Balancer to become active..."
             aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
             
-            # Check ALB status
+            # Get ALB status and DNS
             ALB_STATE=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].State.Code' --output text)
-            echo "ALB state: $ALB_STATE"
+            ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
+            
+            echo "🔍 ALB State: $ALB_STATE"
+            echo "🔍 ALB DNS: $ALB_DNS"
             
             # Wait for Auto Scaling Group to have healthy instances
             ASG_NAME="capstoneproject-asg"
-            echo "Waiting for Auto Scaling Group instances to be healthy..."
+            echo "⏳ Waiting for Auto Scaling Group instances to be healthy..."
+            echo "   This typically takes 3-5 minutes for instances to launch and pass health checks..."
             
-            # Wait up to 10 minutes for healthy instances
-            for i in {1..20}; do
-              HEALTHY_COUNT=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $ASG_NAME --query 'AutoScalingGroups[0].Instances[?HealthStatus==`Healthy`] | length(@)' --output text)
-              echo "Healthy instances: $HEALTHY_COUNT"
+            # Wait up to 15 minutes for healthy instances with progress updates
+            for i in {1..30}; do
+              TOTAL_INSTANCES=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $ASG_NAME --query 'AutoScalingGroups[0].Instances | length(@)' --output text 2>/dev/null || echo "0")
+              HEALTHY_COUNT=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $ASG_NAME --query 'AutoScalingGroups[0].Instances[?HealthStatus==`Healthy`] | length(@)' --output text 2>/dev/null || echo "0")
+              INSERVICE_COUNT=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $ASG_NAME --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`] | length(@)' --output text 2>/dev/null || echo "0")
               
-              if [ "$HEALTHY_COUNT" -ge "2" ]; then
+              echo "   Progress: $i/30 - Total: $TOTAL_INSTANCES, Healthy: $HEALTHY_COUNT, InService: $INSERVICE_COUNT"
+              
+              if [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ]; then
                 break
               fi
               
-              echo "Waiting for instances to become healthy... ($i/20)"
+              if [ $i -eq 30 ]; then
+                echo "❌ Timeout waiting for healthy instances"
+                echo "Final status - Total: $TOTAL_INSTANCES, Healthy: $HEALTHY_COUNT, InService: $INSERVICE_COUNT"
+                exit 1
+              fi
+              
               sleep 30
             done
             
-            # Get web URL
-            WEB_URL=$(terraform output -raw web_url)
-            echo "Web URL: $WEB_URL"
+            # Get web URLs from terraform output
+            WEB_URL=$(terraform output -raw web_url 2>/dev/null || echo "")
+            ALB_DNS_OUTPUT=$(terraform output -raw web_alb_dns 2>/dev/null || echo "")
             
-            if [ "$ALB_STATE" = "active" ] && [ "$HEALTHY_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
-              echo "✅ Web tier deployed and verified successfully"
-              echo "🌐 Application URL: $WEB_URL"
+            echo "🔍 Web URL: $WEB_URL"
+            echo "🔍 ALB DNS (from output): $ALB_DNS_OUTPUT"
+            
+            # Test web application accessibility
+            if [ ! -z "$WEB_URL" ] && [ "$WEB_URL" != "null" ]; then
+              echo "⏳ Testing web application accessibility..."
+              for i in {1..6}; do
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$WEB_URL" --connect-timeout 10 || echo "000")
+                echo "   HTTP Status: $HTTP_STATUS"
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  break
+                fi
+                echo "   Waiting for web application to respond... ($i/6)"
+                sleep 30
+              done
+            fi
+            
+            # Final verification
+            if [ "$ALB_STATE" = "active" ] && [ "$HEALTHY_COUNT" -ge "2" ] && [ "$INSERVICE_COUNT" -ge "2" ] && [ ! -z "$WEB_URL" ]; then
+              echo "✅ Web tier deployed and verified successfully!"
+              echo "📊 Summary:"
+              echo "   - Load Balancer: $ALB_NAME ($ALB_STATE)"
+              echo "   - ALB DNS: $ALB_DNS"
+              echo "   - Auto Scaling Group: $ASG_NAME"
+              echo "   - Healthy Instances: $HEALTHY_COUNT"
+              echo "   - InService Instances: $INSERVICE_COUNT"
+              echo "   - Application URL: $WEB_URL"
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "   - HTTP Status: ✅ $HTTP_STATUS (Accessible)"
+              else
+                echo "   - HTTP Status: ⚠️ $HTTP_STATUS (May still be initializing)"
+              fi
             else
               echo "❌ Web tier verification failed"
+              echo "ALB State: $ALB_STATE"
+              echo "Healthy Count: $HEALTHY_COUNT"
+              echo "InService Count: $INSERVICE_COUNT"
+              echo "Web URL: $WEB_URL"
               exit 1
             fi
           '''
@@ -275,49 +515,131 @@ pipeline {
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
         ]) {
           sh '''
-            echo "Creating Grafana monitoring server..."
-            terraform apply -input=false -auto-approve -target=module.monitoring tfplan
+            echo "=========================================="
+            echo "STAGE 5/5: MONITORING STACK"
+            echo "=========================================="
+            
+            echo "🚀 Creating Monitoring infrastructure..."
+            echo "- EC2 Instance (t3.micro)"
+            echo "- Monitoring Dashboard (PHP/SQLite)"
+            echo "- Grafana Server (Port 3000)"
+            echo "- Security Groups"
+            echo "- Auto-configured Services"
+            
+            # Create separate plan for monitoring only
+            terraform plan -target=module.monitoring \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -out=monitoring-plan.tfplan
+            
+            echo "⏳ Applying monitoring configuration..."
+            terraform apply -input=false -auto-approve monitoring-plan.tfplan
             
             echo "⏳ Verifying Monitoring deployment..."
             
-            # Get monitoring instance details
-            MONITORING_IP=$(terraform output -raw monitoring_public_ip)
-            echo "Monitoring server IP: $MONITORING_IP"
+            # Get monitoring instance details with retry
+            for i in {1..5}; do
+              MONITORING_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo "")
+              if [ ! -z "$MONITORING_IP" ] && [ "$MONITORING_IP" != "null" ]; then
+                break
+              fi
+              echo "Waiting for monitoring IP to be available... ($i/5)"
+              sleep 10
+            done
             
-            # Wait for EC2 instance to be running and status checks to pass
-            INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-monitoring-server" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+            echo "🔍 Monitoring Server IP: $MONITORING_IP"
             
-            if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "null" ]; then
-              echo "Monitoring instance ID: $INSTANCE_ID"
-              
+            # Wait for EC2 instance to be running and get instance ID
+            echo "⏳ Finding monitoring instance..."
+            for i in {1..10}; do
+              INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-monitoring-server" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || echo "None")
+              if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "null" ] && [ ! -z "$INSTANCE_ID" ]; then
+                break
+              fi
+              echo "Waiting for monitoring instance to be running... ($i/10)"
+              sleep 15
+            done
+            
+            echo "🔍 Instance ID: $INSTANCE_ID"
+            
+            if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "null" ] && [ ! -z "$INSTANCE_ID" ]; then
               # Wait for instance to be running
+              echo "⏳ Waiting for instance to be fully running..."
               aws ec2 wait instance-running --instance-ids $INSTANCE_ID
               
-              # Wait for status checks
-              echo "Waiting for instance status checks to pass..."
+              # Wait for status checks to pass
+              echo "⏳ Waiting for instance status checks to pass..."
               aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
               
-              # Wait for HTTP services to be ready (with timeout)
-              echo "Waiting for monitoring services to be ready..."
-              for i in {1..12}; do
+              # Get instance status
+              INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[0].Instances[0].State.Name' --output text)
+              STATUS_CHECK=$(aws ec2 describe-instance-status --instance-ids $INSTANCE_ID --query 'InstanceStatuses[0].SystemStatus.Status' --output text 2>/dev/null || echo "unknown")
+              
+              echo "🔍 Instance State: $INSTANCE_STATE"
+              echo "🔍 Status Check: $STATUS_CHECK"
+              
+              # Wait for HTTP services to be ready (user data script installation)
+              echo "⏳ Waiting for monitoring services to be installed and ready..."
+              echo "   This includes Apache, PHP, Grafana installation and configuration..."
+              
+              for i in {1..20}; do
                 # Check if monitoring dashboard is accessible
-                if curl -s -o /dev/null -w "%{http_code}" "http://${MONITORING_IP}" | grep -q "200"; then
-                  echo "Monitoring dashboard is ready"
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${MONITORING_IP}" --connect-timeout 10 || echo "000")
+                echo "   Progress: $i/20 - HTTP Status: $HTTP_STATUS"
+                
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "   ✅ Monitoring dashboard is ready!"
                   break
                 fi
-                echo "Waiting for monitoring dashboard... ($i/12)"
+                
+                if [ $i -eq 20 ]; then
+                  echo "   ⚠️ Dashboard may still be initializing (this is normal)"
+                fi
+                
                 sleep 30
               done
               
-              # Get URLs
-              DASHBOARD_URL=$(terraform output -raw monitoring_dashboard_url)
-              GRAFANA_URL=$(terraform output -raw grafana_dashboard_url)
-              echo "Monitoring Dashboard: $DASHBOARD_URL"
-              echo "Grafana Dashboard: $GRAFANA_URL"
+              # Test Grafana availability
+              echo "⏳ Testing Grafana availability..."
+              GRAFANA_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${MONITORING_IP}:3000" --connect-timeout 10 || echo "000")
+              echo "🔍 Grafana Status: $GRAFANA_STATUS"
               
-              echo "✅ Monitoring deployed and verified successfully"
-              echo "📊 Monitoring Dashboard: $DASHBOARD_URL"
-              echo "📈 Grafana Dashboard: $GRAFANA_URL (admin/grafana123)"
+              # Get URLs from terraform output
+              DASHBOARD_URL=$(terraform output -raw monitoring_dashboard_url 2>/dev/null || echo "")
+              GRAFANA_URL=$(terraform output -raw grafana_dashboard_url 2>/dev/null || echo "")
+              
+              echo "🔍 Dashboard URL: $DASHBOARD_URL"
+              echo "🔍 Grafana URL: $GRAFANA_URL"
+              
+              # Final verification
+              if [ "$INSTANCE_STATE" = "running" ] && [ "$STATUS_CHECK" = "ok" ] && [ ! -z "$MONITORING_IP" ]; then
+                echo "✅ Monitoring deployed and verified successfully!"
+                echo "📊 Summary:"
+                echo "   - Instance ID: $INSTANCE_ID"
+                echo "   - Public IP: $MONITORING_IP"
+                echo "   - Instance State: $INSTANCE_STATE"
+                echo "   - Status Checks: $STATUS_CHECK"
+                echo "   - Dashboard URL: $DASHBOARD_URL"
+                echo "   - Grafana URL: $GRAFANA_URL"
+                echo "   - Grafana Credentials: admin/grafana123"
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "   - Dashboard Status: ✅ Ready"
+                else
+                  echo "   - Dashboard Status: ⚠️ Still initializing"
+                fi
+                if [ "$GRAFANA_STATUS" = "200" ]; then
+                  echo "   - Grafana Status: ✅ Ready"
+                else
+                  echo "   - Grafana Status: ⚠️ Still initializing"
+                fi
+              else
+                echo "❌ Monitoring verification failed"
+                echo "Instance State: $INSTANCE_STATE"
+                echo "Status Check: $STATUS_CHECK"
+                echo "Monitoring IP: $MONITORING_IP"
+                exit 1
+              fi
             else
               echo "❌ Monitoring verification failed - instance not found"
               exit 1
@@ -332,22 +654,50 @@ pipeline {
       steps {
         echo '⚙️ Finalizing deployment and applying remaining resources...'
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
-            echo "Applying any remaining terraform resources..."
-            terraform apply -input=false -auto-approve tfplan
+            echo "=========================================="
+            echo "FINALIZATION: ENSURING ALL RESOURCES"
+            echo "=========================================="
+            
+            echo "🚀 Final comprehensive deployment..."
+            echo "- Applying any remaining resources"
+            echo "- Ensuring all dependencies are met"
+            echo "- Refreshing terraform state"
+            
+            # Create final comprehensive plan to catch any missed resources
+            terraform plan \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -out=final-plan.tfplan
+            
+            echo "⏳ Applying final configuration..."
+            terraform apply -input=false -auto-approve final-plan.tfplan
             
             echo "⏳ Final verification of all components..."
             
-            # Wait a moment for final configurations to settle
+            # Wait for final configurations to settle
+            echo "Allowing time for final configurations to settle..."
             sleep 30
             
             # Verify terraform state is consistent
-            terraform refresh -input=false
+            echo "Refreshing terraform state..."
+            terraform refresh -input=false \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}"
             
-            echo "✅ Deployment finalized successfully"
-            echo "🎉 All infrastructure components have been deployed!"
+            # Clean up plan files
+            echo "Cleaning up temporary plan files..."
+            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan
+            
+            echo "✅ Deployment finalized successfully!"
+            echo "🎉 All infrastructure components have been deployed and verified!"
           '''
         }
       }
