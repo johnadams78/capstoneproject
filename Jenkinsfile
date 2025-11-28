@@ -272,6 +272,7 @@ pipeline {
     
     stage('Deploy VPC') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -388,6 +389,7 @@ pipeline {
     
     stage('Deploy IAM') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -480,6 +482,7 @@ pipeline {
     
     stage('Deploy Database') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -588,6 +591,7 @@ pipeline {
     
     stage('Deploy Web Tier') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -735,6 +739,7 @@ pipeline {
     
     stage('Deploy Monitoring') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -900,6 +905,7 @@ pipeline {
     
     stage('Finalize Deployment') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -959,6 +965,7 @@ pipeline {
     
     stage('Verify Infrastructure') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
@@ -1063,6 +1070,7 @@ pipeline {
     
     stage('🎉 Deployment Success - Access Information') {
       when { 
+        beforeAgent true
         allOf {
           expression { params.ACTION == 'install' }
           expression { env.PLAN_VALIDATED == 'true' }
