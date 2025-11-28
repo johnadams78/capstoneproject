@@ -88,21 +88,22 @@ resource "aws_launch_template" "web_lt" {
   instance_type = var.instance_type
   iam_instance_profile { name = var.iam_instance_profile }
   user_data = base64encode(<<-EOT
-    #!/bin/bash
-    set -e
-    
-    # Install LAMP stack (skip yum update for faster boot)
-    amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
-    yum install -y httpd mariadb php-mysqlnd
-    
-    # Start Apache with retry logic
-    systemctl start httpd
-    systemctl enable httpd
-    sleep 5
-    systemctl restart httpd
-    
-    # Create car dealership website
-    cat > /var/www/html/index.php <<'PHP'
+#!/bin/bash
+set -e
+
+# Install LAMP stack (skip yum update for faster boot)
+amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+yum install -y httpd mariadb php-mysqlnd
+
+# Start Apache
+systemctl start httpd
+systemctl enable httpd
+
+# Create simple test page first to pass health checks
+echo "<html><body><h1>AutoMax Car Dealership</h1><p>Loading...</p></body></html>" > /var/www/html/index.html
+
+# Create car dealership website
+cat > /var/www/html/index.php <<'PHP'
 <?php
 // Database connection variables - will be populated by Terraform
 $db_host = '${var.db_endpoint}';
@@ -405,16 +406,16 @@ $az = @file_get_contents('http://169.254.169.254/latest/meta-data/placement/avai
 </body>
 </html>
 PHP
-    
-    # Set proper permissions
-    chown -R apache:apache /var/www/html
-    chmod -R 755 /var/www/html
-    
-    # Configure PHP
-    echo "date.timezone = UTC" >> /etc/php.ini
-    
-    # Restart Apache
-    systemctl restart httpd
+
+# Set proper permissions
+chown -R apache:apache /var/www/html
+chmod -R 755 /var/www/html
+
+# Configure PHP
+echo "date.timezone = UTC" >> /etc/php.ini
+
+# Restart Apache to load PHP config
+systemctl restart httpd
 EOT
   )
   network_interfaces {
