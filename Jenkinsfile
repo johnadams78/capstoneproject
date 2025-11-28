@@ -9,7 +9,6 @@ pipeline {
   }
   
   environment {
-    PROJECT_DIR = "${env.WORKSPACE}"
     TF_IN_AUTOMATION = 'true'
     TF_CLI_ARGS = '-no-color'
   }
@@ -43,548 +42,243 @@ pipeline {
   }
 
   stages {
+    
     stage('Initialize') {
       steps {
-        dir(env.PROJECT_DIR) {
-          script {
-            echo "╔════════════════════════════════════════════════════════════╗"
-            echo "║              THREE-TIER WEB INFRASTRUCTURE                 ║"
-            echo "╚════════════════════════════════════════════════════════════╝"
-            echo ""
-            echo "🎯 Action: ${params.ACTION.toUpperCase()}"
-            echo "🌍 Branch: ${env.BRANCH_NAME}"
-            echo "🔧 Build: #${env.BUILD_NUMBER}"
-            echo ""
-            echo "📦 Components to deploy:"
-            if (params.DEPLOY_DATABASE) {
-              echo "   ✅ Database Tier (Aurora RDS MySQL)"
-            } else {
-              echo "   ❌ Database Tier (SKIPPED)"
-            }
-            if (params.DEPLOY_WEB) {
-              echo "   ✅ Web Tier (EC2 + Car Dealership App)"
-            } else {
-              echo "   ❌ Web Tier (SKIPPED)"
-            }
-            if (params.DEPLOY_MONITORING) {
-              echo "   ✅ Monitoring Tier (Grafana)"
-            } else {
-              echo "   ❌ Monitoring Tier (SKIPPED)"
-            }
-            echo ""
-            echo "════════════════════════════════════════════════════════════"
-          }
-          
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            sh '''
-              echo "🔧 Initializing Terraform..."
-              terraform init -upgrade
-              
-              echo ""
-              echo "📋 Terraform Version Info:"
-              terraform version
-              
-              echo ""
-              echo "☁️  AWS Account Info:"
-              aws sts get-caller-identity --query '[Account,Arn]' --output text
-              
-              echo ""
-              echo "🌍 Region: $(aws configure get region || echo us-east-1)"
-              echo ""
-            '''
-          }
+        echo '🔧 Initializing Terraform and AWS...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            terraform init -upgrade
+            echo "✅ Terraform initialized"
+            echo "AWS Account: $(aws sts get-caller-identity --query Account --output text)"
+            echo "AWS Region: $(aws configure get region || echo us-east-1)"
+          '''
         }
       }
     }
-
-    stage('Plan') {
+    
+    stage('Plan Infrastructure') {
       when { 
-        expression { params.ACTION == 'plan' || params.ACTION == 'install' }
+        anyOf {
+          expression { params.ACTION == 'plan' }
+          expression { params.ACTION == 'install' }
+        }
       }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
-            string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║                 TERRAFORM PLANNING PHASE                   ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Analyzing infrastructure changes..."
-              echo "   ├─ Checking resource dependencies"
-              echo "   ├─ Validating configurations"
-              echo "   ├─ Calculating costs"
-              echo "   └─ Generating execution plan"
-              echo ""
-            }
+        echo '📋 Creating Terraform execution plan...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+        ]) {
+          sh '''
+            terraform plan \
+              -var "deploy_database=${DEPLOY_DATABASE}" \
+              -var "deploy_web=${DEPLOY_WEB}" \
+              -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
+              -out=tfplan
             
-            sh '''
-              echo "📊 Creating Terraform execution plan..."
-              echo ""
-              
-              terraform plan \
-                -var "deploy_database=${DEPLOY_DATABASE}" \
-                -var "deploy_web=${DEPLOY_WEB}" \
-                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
-                -var "db_master_password=${TF_DB_PASSWORD}" \
-                -out=tfplan 2>&1 | tee plan.txt | while IFS= read -r line; do
-                echo "$line"
-                
-                # Show progress with green bars for each module
-                if echo "$line" | grep -q "module.vpc"; then
-                  echo "  → 🌐 \033[32m████░░░░░░\033[0m Planning VPC & Networking..."
-                fi
-                if echo "$line" | grep -q "module.iam"; then
-                  echo "  → 🔐 \033[32m███░░░░░░░\033[0m Planning IAM Roles..."
-                fi
-                if echo "$line" | grep -q "module.db" && [ "$DEPLOY_DATABASE" = "true" ]; then
-                  echo "  → 🗄️  \033[32m██████░░░░\033[0m Planning Database (Aurora RDS)..."
-                fi
-                if echo "$line" | grep -q "module.web" && [ "$DEPLOY_WEB" = "true" ]; then
-                  echo "  → 🖥️  \033[32m████░░░░░░\033[0m Planning Web Tier..."
-                fi
-                if echo "$line" | grep -q "module.monitoring" && [ "$DEPLOY_MONITORING" = "true" ]; then
-                  echo "  → 📊 \033[32m████░░░░░░\033[0m Planning Monitoring..."
-                fi
-                
-                # Cost information
-                if echo "$line" | grep -q "aws_nat_gateway"; then
-                  echo "  💰 NAT Gateway: ~\$32/month"
-                fi
-                if echo "$line" | grep -q "aws_rds_cluster"; then
-                  echo "  💰 Aurora RDS: ~\$50-100/month"
-                fi
-                if echo "$line" | grep -q "aws_instance.*t3"; then
-                  echo "  💰 EC2 Instances: ~\$20-40/month"
-                fi
-                
-                # Plan completion
-                if echo "$line" | grep -q "Plan:"; then
-                  echo ""
-                  echo "  ✅ \033[32m██████████\033[0m Planning Complete"
-                  echo ""
-                  echo "════════════════════════════════════════════════════════════"
-                fi
-              done
-            '''
-            
-            archiveArtifacts artifacts: 'plan.txt', allowEmptyArchive: true
-          }
+            echo "✅ Plan created successfully"
+          '''
         }
+        archiveArtifacts artifacts: 'tfplan', allowEmptyArchive: true
       }
     }
-
-    // SEQUENTIAL DEPLOYMENT STAGES FOR DASHBOARD PROGRESS BARS
-
-    stage('🌐 Deploy VPC & Networking') {
-      when { 
-        expression { params.ACTION == 'install' } 
-      }
+    
+    stage('Deploy VPC') {
+      when { expression { params.ACTION == 'install' } }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            sh 'test -f tfplan || (echo "❌ tfplan not found; run Plan first" && exit 1)'
-            
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         🌐 DEPLOYING VPC & NETWORKING (TIER 1)             ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Creating foundation infrastructure:"
-              echo "   ├─ Virtual Private Cloud (VPC)"
-              echo "   ├─ Public & Private Subnets (Multi-AZ)"
-              echo "   ├─ Internet Gateway"
-              echo "   ├─ NAT Gateway (~\$32/month)"
-              echo "   └─ Route Tables & Security Groups"
-              echo ""
-            }
-            
-            sh '''
-              echo "  → 🌐 \033[32m██░░░░░░░░\033[0m Creating VPC, Subnets, Internet Gateway..."
-              
-              terraform apply -input=false -auto-approve \
-                -target=module.vpc \
-                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ VPC deployment failed!"
-                exit 1
-              fi
-              echo "  ✅ \033[32m██████████\033[0m VPC & Networking Complete!"
-              echo ""
-            '''
-          }
+        echo '🌐 Deploying VPC and Networking...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Creating VPC, Subnets, Internet Gateway, NAT Gateway..."
+            terraform apply -input=false -auto-approve -target=module.vpc tfplan
+            echo "✅ VPC and Networking deployed successfully"
+          '''
         }
       }
     }
-
-    stage('🔐 Deploy IAM Roles') {
-      when { 
-        expression { params.ACTION == 'install' } 
-      }
+    
+    stage('Deploy IAM') {
+      when { expression { params.ACTION == 'install' } }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         🔐 DEPLOYING IAM ROLES (TIER 2)                    ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Creating security & access policies:"
-              echo "   ├─ EC2 Instance Profiles"
-              echo "   ├─ IAM Roles for Web/Monitoring servers"
-              echo "   └─ CloudWatch and SSM permissions"
-              echo ""
-            }
-            
-            sh '''
-              echo "  → 🔐 \033[32m██░░░░░░░░\033[0m Creating IAM instance profiles..."
-              
-              terraform apply -input=false -auto-approve \
-                -target=module.iam \
-                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ IAM deployment failed!"
-                exit 1
-              fi
-              echo "  ✅ \033[32m██████████\033[0m IAM Roles Complete!"
-              echo ""
-            '''
-          }
+        echo '🔐 Deploying IAM Roles and Policies...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Creating IAM roles and instance profiles..."
+            terraform apply -input=false -auto-approve -target=module.iam tfplan
+            echo "✅ IAM resources deployed successfully"
+          '''
         }
       }
     }
-
-    stage('🗄️ Deploy Database') {
+    
+    stage('Deploy Database') {
       when { 
-        allOf { 
+        allOf {
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_DATABASE == true }
-        } 
+        }
       }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         🗄️  DEPLOYING DATABASE (TIER 3)                    ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Creating Aurora RDS MySQL cluster:"
-              echo "   ├─ Aurora Cluster (Multi-AZ)"
-              echo "   ├─ Database Instances (db.r6g.large)"
-              echo "   ├─ Database Subnet Group"
-              echo "   └─ Database Security Group"
-              echo ""
-              echo "⏱️  Note: This step takes ~5-7 minutes"
-              echo "💰 Cost: ~\$50-100/month"
-              echo ""
-            }
-            
-            sh '''
-              echo "  → 🗄️  \033[32m███░░░░░░░\033[0m Creating Aurora cluster... (⏱️  ~5 mins)"
-              
-              terraform apply -input=false -auto-approve \
-                -target=module.db \
-                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ Database deployment failed!"
-                exit 1
-              fi
-              echo "  ✅ \033[32m██████████\033[0m Database Tier Complete!"
-              echo ""
-            '''
-          }
+        echo '🗄️ Deploying Aurora RDS Database (this takes ~5-7 minutes)...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Creating Aurora MySQL cluster and instances..."
+            terraform apply -input=false -auto-approve -target=module.db tfplan
+            echo "✅ Database deployed successfully"
+          '''
         }
       }
     }
-
-    stage('🖥️ Deploy Web Tier') {
+    
+    stage('Deploy Web Tier') {
       when { 
-        allOf { 
+        allOf {
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_WEB == true }
-        } 
+        }
       }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         🖥️  DEPLOYING WEB TIER (TIER 4)                    ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Creating web servers:"
-              echo "   ├─ EC2 Instances (t3.medium)"
-              echo "   ├─ Auto Scaling Group"
-              echo "   ├─ Application Load Balancer"
-              echo "   ├─ Car Dealership PHP Application"
-              echo "   └─ Web Security Groups"
-              echo ""
-              echo "💰 Cost: ~\$20-40/month per instance"
-              echo ""
-            }
-            
-            sh '''
-              echo "  → 🖥️  \033[32m████░░░░░░\033[0m Launching web servers..."
-              
-              terraform apply -input=false -auto-approve \
-                -target=module.web \
-                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ Web tier deployment failed!"
-                exit 1
-              fi
-              echo "  ✅ \033[32m██████████\033[0m Web Tier Complete!"
-              echo ""
-            '''
-          }
+        echo '🖥️ Deploying Web Servers and Application...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Creating EC2 instances, Auto Scaling Group, Load Balancer..."
+            terraform apply -input=false -auto-approve -target=module.web tfplan
+            echo "✅ Web tier deployed successfully"
+          '''
         }
       }
     }
-
-    stage('📊 Deploy Monitoring') {
+    
+    stage('Deploy Monitoring') {
       when { 
-        allOf { 
+        allOf {
           expression { params.ACTION == 'install' }
           expression { params.DEPLOY_MONITORING == true }
-        } 
+        }
       }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         📊 DEPLOYING MONITORING (TIER 5)                   ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Creating monitoring infrastructure:"
-              echo "   ├─ Grafana Server EC2 Instance"
-              echo "   ├─ CloudWatch Integration"
-              echo "   ├─ Performance Dashboards"
-              echo "   └─ Monitoring Security Groups"
-              echo ""
-              echo "💰 Cost: ~\$15-25/month"
-              echo ""
-            }
-            
-            sh '''
-              echo "  → 📊 \033[32m████░░░░░░\033[0m Deploying monitoring stack..."
-              
-              terraform apply -input=false -auto-approve \
-                -target=module.monitoring \
-                tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ Monitoring deployment failed!"
-                exit 1
-              fi
-              echo "  ✅ \033[32m██████████\033[0m Monitoring Tier Complete!"
-              echo ""
-            '''
-          }
+        echo '📊 Deploying Monitoring Stack (Grafana)...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Creating Grafana monitoring server..."
+            terraform apply -input=false -auto-approve -target=module.monitoring tfplan
+            echo "✅ Monitoring deployed successfully"
+          '''
         }
       }
     }
-
-    stage('⚙️ Finalize Deployment') {
-      when { 
-        expression { params.ACTION == 'install' } 
-      }
+    
+    stage('Finalize Deployment') {
+      when { expression { params.ACTION == 'install' } }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║         ⚙️  FINALIZING DEPLOYMENT                           ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-              echo "📋 Applying any remaining resources and configurations..."
-              echo ""
-            }
-            
-            sh '''
-              echo "  → ⚙️  \033[32m█████░░░░░\033[0m Finalizing deployment..."
-              
-              terraform apply -input=false -auto-approve tfplan 2>&1 | grep -E "(Creating|Modifying|Creation complete|Apply complete|Error)" || true
-              
-              if [ $? -ne 0 ]; then
-                echo "❌ Final deployment step failed!"
-                exit 1
-              fi
-              
-              echo "  ✅ \033[32m██████████\033[0m Deployment Complete!"
-              echo ""
-              echo "════════════════════════════════════════════════════════════"
-              echo "🎉 ALL INFRASTRUCTURE DEPLOYED SUCCESSFULLY!"
-              echo "════════════════════════════════════════════════════════════"
-            '''
-            
-            archiveArtifacts artifacts: '*.txt', allowEmptyArchive: true
-          }
+        echo '⚙️ Finalizing deployment and applying remaining resources...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Applying any remaining terraform resources..."
+            terraform apply -input=false -auto-approve tfplan
+            echo "✅ Deployment finalized successfully"
+          '''
         }
       }
     }
-
-    stage('✅ Verify Infrastructure') {
-      when { 
-        expression { params.ACTION == 'install' } 
-      }
+    
+    stage('Verify Infrastructure') {
+      when { expression { params.ACTION == 'install' } }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
-          ]) {
-            script {
-              echo ""
-              echo "╔════════════════════════════════════════════════════════════╗"
-              echo "║           ✅ VERIFYING DEPLOYED INFRASTRUCTURE              ║"
-              echo "╚════════════════════════════════════════════════════════════╝"
-              echo ""
-            }
+        echo '✅ Verifying deployed infrastructure...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+        ]) {
+          sh '''
+            echo "Checking infrastructure status..."
             
-            sh '''
-              echo "🔍 Checking deployed infrastructure..."
-              echo ""
-              
-              # Check web server
-              WEB_IP=$(terraform output -raw web_public_ip 2>/dev/null || echo "")
-              if [ ! -z "$WEB_IP" ]; then
-                echo "🖥️  Web Server: http://$WEB_IP"
-                echo "   Testing connectivity..."
-                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 http://$WEB_IP/ || echo "000")
-                if [ "$HTTP_CODE" = "200" ]; then
-                  echo "   ✅ Web Server: HTTP $HTTP_CODE (Healthy)"
-                else
-                  echo "   ⚠️  Web Server: HTTP $HTTP_CODE (Not responding yet - may need 2-3 mins)"
-                fi
-              else
-                echo "   ℹ️  Web server not deployed"
-              fi
-              
-              echo ""
-              
-              # Check database
-              DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo "")
-              if [ ! -z "$DB_ENDPOINT" ]; then
-                echo "🗄️  Aurora RDS Database"
-                echo "   ✅ Endpoint: $DB_ENDPOINT"
-                echo "   ✅ Database deployed successfully"
-              else
-                echo "   ℹ️  Database not deployed"
-              fi
-              
-              echo ""
-              
-              # Check monitoring
-              MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo "")
-              if [ ! -z "$MON_IP" ]; then
-                echo "📊 Monitoring Server: http://$MON_IP:3000"
-                echo "   ✅ Grafana deployed successfully"
-              else
-                echo "   ℹ️  Monitoring not deployed"
-              fi
-              
-              echo ""
-              echo "════════════════════════════════════════════════════════════"
-              echo "ℹ️  Note: Web services may take 2-3 minutes to fully initialize"
-              echo "════════════════════════════════════════════════════════════"
-            '''
-          }
+            # Check VPC
+            echo "VPC ID: $(terraform output -raw vpc_id 2>/dev/null || echo 'Not deployed')"
+            
+            # Check Web Server
+            WEB_IP=$(terraform output -raw web_public_ip 2>/dev/null || echo "")
+            if [ ! -z "$WEB_IP" ]; then
+              echo "Web Server: http://$WEB_IP"
+            else
+              echo "Web Server: Not deployed"
+            fi
+            
+            # Check Database
+            DB_ENDPOINT=$(terraform output -raw aurora_cluster_endpoint 2>/dev/null || echo "")
+            if [ ! -z "$DB_ENDPOINT" ]; then
+              echo "Database Endpoint: $DB_ENDPOINT"
+            else
+              echo "Database: Not deployed"
+            fi
+            
+            # Check Monitoring
+            MON_IP=$(terraform output -raw monitoring_public_ip 2>/dev/null || echo "")
+            if [ ! -z "$MON_IP" ]; then
+              echo "Monitoring: http://$MON_IP:3000"
+            else
+              echo "Monitoring: Not deployed"
+            fi
+            
+            echo "✅ Infrastructure verification complete"
+          '''
         }
       }
     }
-
-    // DESTROY STAGES (existing destroy logic - simplified for space)
-    stage('⚠️ Destroy (Confirm)') {
+    
+    stage('Destroy Confirmation') {
       when { 
-        allOf { 
+        allOf {
           expression { params.ACTION == 'destroy' }
           expression { params.AUTO_APPROVE == false }
-        } 
+        }
       }
       steps {
+        echo '⚠️ DESTRUCTION WARNING: This will permanently destroy all infrastructure!'
         timeout(time: 30, unit: 'MINUTES') {
-          script {
-            echo "╔════════════════════════════════════════════════════════════╗"
-            echo "║                   ⚠️  DESTRUCTION WARNING ⚠️                 ║"
-            echo "╚════════════════════════════════════════════════════════════╝"
-            echo ""
-            echo "This will PERMANENTLY DESTROY all infrastructure!"
-            echo ""
-            echo "⚠️  THIS ACTION IS IRREVERSIBLE!"
-            echo "════════════════════════════════════════════════════════════"
-          }
           input message: '💥 Are you ABSOLUTELY SURE you want to DESTROY everything?', ok: 'Yes, Destroy All'
         }
       }
     }
-
-    stage('💥 Destroy All') {
-      when { 
-        expression { params.ACTION == 'destroy' } 
-      }
+    
+    stage('Destroy Infrastructure') {
+      when { expression { params.ACTION == 'destroy' } }
       steps {
-        dir(env.PROJECT_DIR) {
-          withCredentials([
-            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
-            string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
-          ]) {
-            sh '''
-              echo "💥 Starting Complete Infrastructure Destruction..."
-              echo ""
-              
-              terraform destroy -input=false -auto-approve \
-                -var "db_master_password=${TF_DB_PASSWORD}" 2>&1 | tee destroy.txt
-              
-              echo ""
-              echo "✅ \033[32m██████████\033[0m ALL INFRASTRUCTURE DESTROYED!"
-            '''
-            
-            archiveArtifacts artifacts: 'destroy.txt', allowEmptyArchive: true
-          }
+        echo '💥 Destroying all infrastructure...'
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+        ]) {
+          sh '''
+            echo "Destroying all AWS resources..."
+            terraform destroy -input=false -auto-approve -var "db_master_password=${TF_DB_PASSWORD}"
+            echo "✅ All infrastructure destroyed successfully"
+          '''
         }
+        archiveArtifacts artifacts: '*.txt', allowEmptyArchive: true
       }
     }
   }
 
   post {
     always {
-      echo ""
-      echo "╔════════════════════════════════════════════════════════════╗"
-      echo "║                    PIPELINE COMPLETE                       ║"
-      echo "╚════════════════════════════════════════════════════════════╝"
-      echo ""
-      echo "📊 Build: #${env.BUILD_NUMBER}"
-      echo "🕐 Duration: ${currentBuild.durationString}"
-      echo "📝 Status: ${currentBuild.currentResult}"
-      echo ""
+      echo "Pipeline completed: ${currentBuild.currentResult}"
+      echo "Build #${env.BUILD_NUMBER} - Duration: ${currentBuild.durationString}"
     }
     success {
       echo "✅ Pipeline completed successfully!"
