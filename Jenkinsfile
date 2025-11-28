@@ -6,11 +6,13 @@ pipeline {
     timestamps()
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '10'))
+    timeout(time: 90, unit: 'MINUTES')
   }
   
   environment {
     TF_IN_AUTOMATION = 'true'
     TF_CLI_ARGS = '-no-color'
+    CLEANUP_MODE = 'false'
   }
   
   parameters {
@@ -175,9 +177,19 @@ pipeline {
               echo "   - Internet Gateway: $IGW_ID"
               echo "   - NAT Gateways: $NAT_COUNT"
             else
-              echo "❌ VPC verification failed"
+              echo "❌ VPC verification failed - initiating cleanup"
               echo "Expected: 4+ subnets (2+ public, 2+ private), 1+ IGW, 1+ NAT"
               echo "Got: $SUBNET_COUNT subnets ($PUBLIC_SUBNETS public, $PRIVATE_SUBNETS private), IGW: $IGW_ID, NAT: $NAT_COUNT"
+              
+              # Cleanup failed VPC resources
+              echo "🧹 Cleaning up failed VPC resources..."
+              if [ ! -z "$VPC_ID" ] && [ "$VPC_ID" != "null" ]; then
+                terraform destroy -target=module.vpc -input=false -auto-approve \
+                  -var "deploy_database=${DEPLOY_DATABASE}" \
+                  -var "deploy_web=${DEPLOY_WEB}" \
+                  -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "VPC cleanup failed"
+              fi
+              
               exit 1
             fi
           '''
@@ -255,10 +267,18 @@ pipeline {
               echo "   - Profile ARN: $PROFILE_ARN"
               echo "   - Attached Policies: $ATTACHED_POLICIES"
             else
-              echo "❌ IAM verification failed"
+              echo "❌ IAM verification failed - initiating cleanup"
               echo "Role ARN: $ROLE_ARN"
               echo "Profile ARN: $PROFILE_ARN" 
               echo "Policies: $ATTACHED_POLICIES"
+              
+              # Cleanup failed IAM resources
+              echo "🧹 Cleaning up failed IAM and VPC resources..."
+              terraform destroy -target=module.iam -target=module.vpc -input=false -auto-approve \
+                -var "deploy_database=${DEPLOY_DATABASE}" \
+                -var "deploy_web=${DEPLOY_WEB}" \
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "IAM/VPC cleanup failed"
+              
               exit 1
             fi
           '''
@@ -351,10 +371,19 @@ pipeline {
               echo "   - Database: $DB_NAME"
               echo "   - Status: Ready for connections"
             else
-              echo "❌ Database verification failed"
+              echo "❌ Database verification failed - initiating cleanup"
               echo "Cluster Status: $CLUSTER_STATUS"
               echo "Instance Status: $INSTANCE_STATUS"
               echo "Endpoint: $DB_ENDPOINT"
+              
+              # Cleanup failed database and previous resources
+              echo "🧹 Cleaning up failed database and previous resources..."
+              terraform destroy -target=module.db -target=module.iam -target=module.vpc -input=false -auto-approve \
+                -var "deploy_database=${DEPLOY_DATABASE}" \
+                -var "deploy_web=${DEPLOY_WEB}" \
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Database/IAM/VPC cleanup failed"
+              
               exit 1
             fi
           '''
@@ -485,11 +514,20 @@ pipeline {
                 echo "   - HTTP Status: ⚠️ $HTTP_STATUS (May still be initializing)"
               fi
             else
-              echo "❌ Web tier verification failed"
+              echo "❌ Web tier verification failed - initiating cleanup"
               echo "ALB State: $ALB_STATE"
               echo "Healthy Count: $HEALTHY_COUNT"
               echo "InService Count: $INSERVICE_COUNT"
               echo "Web URL: $WEB_URL"
+              
+              # Cleanup failed web tier and previous resources
+              echo "🧹 Cleaning up failed web tier and previous resources..."
+              terraform destroy -target=module.web -target=module.db -target=module.iam -target=module.vpc -input=false -auto-approve \
+                -var "deploy_database=${DEPLOY_DATABASE}" \
+                -var "deploy_web=${DEPLOY_WEB}" \
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Web/Database/IAM/VPC cleanup failed"
+              
               exit 1
             fi
           '''
@@ -626,14 +664,32 @@ pipeline {
                   echo "   - Grafana Status: ⚠️ Still initializing"
                 fi
               else
-                echo "❌ Monitoring verification failed"
+                echo "❌ Monitoring verification failed - initiating cleanup"
                 echo "Instance State: $INSTANCE_STATE"
                 echo "Status Check: $STATUS_CHECK"
                 echo "Monitoring IP: $MONITORING_IP"
+                
+                # Cleanup all resources on monitoring failure
+                echo "🧹 Cleaning up all deployed resources..."
+                terraform destroy -input=false -auto-approve \
+                  -var "deploy_database=${DEPLOY_DATABASE}" \
+                  -var "deploy_web=${DEPLOY_WEB}" \
+                  -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                  -var "db_master_password=${TF_DB_PASSWORD}" || echo "Full cleanup failed"
+                
                 exit 1
               fi
             else
-              echo "❌ Monitoring verification failed - instance not found"
+              echo "❌ Monitoring verification failed - instance not found, initiating cleanup"
+              
+              # Cleanup all resources on monitoring failure
+              echo "🧹 Cleaning up all deployed resources..."
+              terraform destroy -input=false -auto-approve \
+                -var "deploy_database=${DEPLOY_DATABASE}" \
+                -var "deploy_web=${DEPLOY_WEB}" \
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "Full cleanup failed"
+              
               exit 1
             fi
           '''
@@ -836,12 +892,199 @@ pipeline {
     always {
       echo "Pipeline completed: ${currentBuild.currentResult}"
       echo "Build #${env.BUILD_NUMBER} - Duration: ${currentBuild.durationString}"
+      
+      // Cleanup temporary plan files
+      script {
+        try {
+          sh '''
+            echo "🧹 Cleaning up temporary files..."
+            rm -f vpc-plan.tfplan iam-plan.tfplan database-plan.tfplan web-plan.tfplan monitoring-plan.tfplan final-plan.tfplan
+            echo "✅ Temporary files cleaned up"
+          '''
+        } catch (Exception e) {
+          echo "⚠️ Warning: Could not clean up temporary files: ${e.getMessage()}"
+        }
+      }
     }
+    
     success {
       echo "✅ Pipeline completed successfully!"
+      echo "🎉 All infrastructure deployed and verified!"
     }
+    
     failure {
       echo "❌ Pipeline failed. Check logs for details."
+      
+      // Emergency cleanup for failed installations
+      script {
+        if (params.ACTION == 'install') {
+          echo "🚨 EMERGENCY CLEANUP: Pipeline failed during installation"
+          echo "⚠️ Attempting to destroy any partially created resources..."
+          
+          try {
+            withCredentials([
+              [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+              string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+            ]) {
+              timeout(time: 20, unit: 'MINUTES') {
+                sh '''
+                  echo "🔍 Checking for partially created resources..."
+                  
+                  # Initialize terraform if needed
+                  if [ ! -d ".terraform" ]; then
+                    echo "Initializing Terraform for cleanup..."
+                    terraform init -upgrade
+                  fi
+                  
+                  # Get current state
+                  echo "📋 Current terraform state:"
+                  terraform state list || echo "No state file found"
+                  
+                  # Check for AWS resources that might have been created
+                  echo "🔍 Scanning for AWS resources with project tag..."
+                  
+                  # List potential resources by tag
+                  VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=capstoneproject-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+                  ALB_ARN=$(aws elbv2 describe-load-balancers --names "capstoneproject-alb" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+                  DB_CLUSTER=$(aws rds describe-db-clusters --db-cluster-identifier "capstoneproject-cluster" --query 'DBClusters[0].DBClusterIdentifier' --output text 2>/dev/null || echo "None")
+                  
+                  echo "Found resources:"
+                  echo "- VPC: $VPC_ID"
+                  echo "- ALB: $ALB_ARN"
+                  echo "- DB Cluster: $DB_CLUSTER"
+                  
+                  # Attempt graceful terraform destroy if state exists
+                  if terraform state list > /dev/null 2>&1; then
+                    echo "🔥 Attempting Terraform destroy..."
+                    terraform destroy -input=false -auto-approve \
+                      -var "deploy_database=${DEPLOY_DATABASE}" \
+                      -var "deploy_web=${DEPLOY_WEB}" \
+                      -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                      -var "db_master_password=${TF_DB_PASSWORD}" || echo "⚠️ Terraform destroy failed, continuing with manual cleanup..."
+                  fi
+                  
+                  # Manual cleanup of specific resources if terraform destroy failed
+                  echo "🧹 Manual cleanup of remaining resources..."
+                  
+                  # Cleanup Database Cluster (most expensive to leave running)
+                  if [ "$DB_CLUSTER" != "None" ] && [ "$DB_CLUSTER" != "null" ]; then
+                    echo "🗄️ Deleting RDS cluster: $DB_CLUSTER"
+                    aws rds delete-db-cluster --db-cluster-identifier "$DB_CLUSTER" --skip-final-snapshot --delete-automated-backups 2>/dev/null || echo "Could not delete DB cluster"
+                  fi
+                  
+                  # Cleanup Load Balancer
+                  if [ "$ALB_ARN" != "None" ] && [ "$ALB_ARN" != "null" ]; then
+                    echo "⚖️ Deleting Load Balancer: $ALB_ARN"
+                    aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" 2>/dev/null || echo "Could not delete ALB"
+                  fi
+                  
+                  # Cleanup Auto Scaling Group
+                  echo "📱 Deleting Auto Scaling Group..."
+                  aws autoscaling delete-auto-scaling-group --auto-scaling-group-name "capstoneproject-asg" --force-delete 2>/dev/null || echo "ASG not found or already deleted"
+                  
+                  # Cleanup Launch Template
+                  echo "🚀 Deleting Launch Template..."
+                  LAUNCH_TEMPLATE_ID=$(aws ec2 describe-launch-templates --launch-template-names "capstoneproject-lt-*" --query 'LaunchTemplates[0].LaunchTemplateId' --output text 2>/dev/null || echo "None")
+                  if [ "$LAUNCH_TEMPLATE_ID" != "None" ] && [ "$LAUNCH_TEMPLATE_ID" != "null" ]; then
+                    aws ec2 delete-launch-template --launch-template-id "$LAUNCH_TEMPLATE_ID" 2>/dev/null || echo "Could not delete launch template"
+                  fi
+                  
+                  # Cleanup EC2 Instances
+                  echo "💻 Terminating EC2 instances..."
+                  INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=capstoneproject-*" "Name=instance-state-name,Values=running,pending" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || echo "")
+                  if [ ! -z "$INSTANCE_IDS" ] && [ "$INSTANCE_IDS" != "None" ]; then
+                    aws ec2 terminate-instances --instance-ids $INSTANCE_IDS 2>/dev/null || echo "Could not terminate instances"
+                  fi
+                  
+                  # Wait a bit for resources to start cleanup
+                  echo "⏳ Waiting for resource deletion to begin..."
+                  sleep 30
+                  
+                  # Cleanup NAT Gateway (has charges)
+                  echo "🌐 Deleting NAT Gateway..."
+                  if [ "$VPC_ID" != "None" ] && [ "$VPC_ID" != "null" ]; then
+                    NAT_GW_ID=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" --query 'NatGateways[0].NatGatewayId' --output text 2>/dev/null || echo "None")
+                    if [ "$NAT_GW_ID" != "None" ] && [ "$NAT_GW_ID" != "null" ]; then
+                      aws ec2 delete-nat-gateway --nat-gateway-id "$NAT_GW_ID" 2>/dev/null || echo "Could not delete NAT gateway"
+                    fi
+                  fi
+                  
+                  echo "🧹 Emergency cleanup completed"
+                  echo "⚠️ Please verify in AWS console that no resources are left running"
+                  echo "💰 This helps prevent unexpected charges"
+                '''
+              }
+            }
+          } catch (Exception cleanupError) {
+            echo "❌ Emergency cleanup failed: ${cleanupError.getMessage()}"
+            echo "🚨 MANUAL INTERVENTION REQUIRED:"
+            echo "   Please check AWS console and manually delete resources:"
+            echo "   - VPC: capstoneproject-vpc"
+            echo "   - RDS Cluster: capstoneproject-cluster" 
+            echo "   - Load Balancer: capstoneproject-alb"
+            echo "   - Auto Scaling Group: capstoneproject-asg"
+            echo "   - EC2 Instances: capstoneproject-*"
+            echo "   - NAT Gateway in the VPC"
+          }
+        }
+      }
+    }
+    
+    aborted {
+      echo "🛑 Pipeline was aborted by user"
+      
+      // Cleanup for aborted builds
+      script {
+        if (params.ACTION == 'install') {
+          echo "🚨 ABORT CLEANUP: Pipeline was interrupted during installation"
+          echo "⚠️ Attempting to destroy any partially created resources..."
+          
+          try {
+            withCredentials([
+              [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+              string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
+            ]) {
+              timeout(time: 15, unit: 'MINUTES') {
+                sh '''
+                  echo "🔍 Emergency cleanup after abort..."
+                  
+                  # Quick terraform destroy attempt
+                  if [ -f ".terraform/terraform.tfstate" ] || [ -f "terraform.tfstate" ]; then
+                    echo "🔥 Quick terraform destroy attempt..."
+                    terraform destroy -input=false -auto-approve \
+                      -var "deploy_database=true" \
+                      -var "deploy_web=true" \
+                      -var "deploy_monitoring=true" \
+                      -var "db_master_password=${TF_DB_PASSWORD}" || echo "Terraform destroy failed"
+                  fi
+                  
+                  # Critical resource cleanup (expensive resources first)
+                  echo "🗄️ Checking for RDS cluster..."
+                  aws rds delete-db-cluster --db-cluster-identifier "capstoneproject-cluster" --skip-final-snapshot --delete-automated-backups 2>/dev/null || echo "No RDS cluster found"
+                  
+                  echo "⚖️ Checking for Load Balancer..."
+                  ALB_ARN=$(aws elbv2 describe-load-balancers --names "capstoneproject-alb" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+                  if [ "$ALB_ARN" != "None" ]; then
+                    aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" 2>/dev/null || echo "Could not delete ALB"
+                  fi
+                  
+                  echo "📱 Checking for Auto Scaling Group..."
+                  aws autoscaling delete-auto-scaling-group --auto-scaling-group-name "capstoneproject-asg" --force-delete 2>/dev/null || echo "No ASG found"
+                  
+                  echo "🧹 Abort cleanup completed"
+                '''
+              }
+            }
+          } catch (Exception abortError) {
+            echo "❌ Abort cleanup failed: ${abortError.getMessage()}"
+            echo "🚨 Please manually check AWS console for remaining resources"
+          }
+        }
+      }
+    }
+    
+    unstable {
+      echo "⚠️ Pipeline completed with warnings"
     }
   }
 }
