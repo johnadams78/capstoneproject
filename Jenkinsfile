@@ -60,12 +60,7 @@ pipeline {
     }
     
     stage('Plan Infrastructure') {
-      when { 
-        anyOf {
-          expression { params.ACTION == 'plan' }
-          expression { params.ACTION == 'install' }
-        }
-      }
+      when { expression { params.ACTION == 'plan' } }
       steps {
         echo '📋 Creating Terraform execution plan...'
         withCredentials([
