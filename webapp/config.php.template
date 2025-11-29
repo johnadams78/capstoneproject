@@ -1,0 +1,6 @@
+<?php
+// Database configuration - these values are replaced by user_data.sh
+$db_host = "DB_HOST_PLACEHOLDER";
+$db_name = "capstonedb";
+$db_user = "admin";
+$db_pass = "DB_PASS_PLACEHOLDER";
