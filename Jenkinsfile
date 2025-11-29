@@ -606,7 +606,8 @@ pipeline {
       steps {
         echo '🖥️ Deploying Web Servers and Application...'
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
             echo "=========================================="
@@ -625,6 +626,7 @@ pipeline {
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
               -out=web-plan.tfplan
             
             echo "⏳ Applying web tier configuration..."
@@ -757,7 +759,8 @@ pipeline {
       steps {
         echo '📊 Deploying Monitoring Stack (Grafana)...'
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
             echo "=========================================="
@@ -776,6 +779,7 @@ pipeline {
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
               -out=monitoring-plan.tfplan
             
             echo "⏳ Applying monitoring configuration..."
