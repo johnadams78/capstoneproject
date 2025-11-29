@@ -59,6 +59,33 @@ if ($count == 0) {
     ('Lucid','Air Grand Touring',2024,169000,'Electric','Sedan','Dual-Motor AWD',1111,'Stellar White',580,'Single-Speed','Electric','Longest range EV at 516 miles. DreamDrive Pro semi-autonomous driving and Glass Cockpit display.','https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=400')");
 }
 
+// Handle customer inquiries if submitted
+if ($_POST['action'] ?? '' == 'submit_inquiry') {
+    $inquiry_car = $_POST['car_id'] ?? 'General';
+    $inquiry_name = $_POST['name'] ?? '';
+    $inquiry_email = $_POST['email'] ?? '';
+    $inquiry_phone = $_POST['phone'] ?? '';
+    $inquiry_message = $_POST['message'] ?? '';
+    
+    // Create inquiries table if not exists
+    $conn->query("CREATE TABLE IF NOT EXISTS inquiries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        car_id VARCHAR(100),
+        customer_name VARCHAR(100),
+        email VARCHAR(100),
+        phone VARCHAR(20),
+        message TEXT,
+        inquiry_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status VARCHAR(20) DEFAULT 'new'
+    )");
+    
+    // Insert inquiry
+    $stmt = $conn->prepare("INSERT INTO inquiries (car_id, customer_name, email, phone, message) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param("sssss", $inquiry_car, $inquiry_name, $inquiry_email, $inquiry_phone, $inquiry_message);
+    $stmt->execute();
+    $inquiry_success = true;
+}
+
 // Handle filters
 $fm = isset($_GET['make']) && $_GET['make'] != '' ? trim($_GET['make']) : '';
 $ft = isset($_GET['type']) && $_GET['type'] != '' ? trim($_GET['type']) : '';
@@ -66,6 +93,7 @@ $fc = isset($_GET['category']) && $_GET['category'] != '' ? trim($_GET['category
 $pmin = isset($_GET['min_price']) && $_GET['min_price'] != '' ? (int)$_GET['min_price'] : 0;
 $pmax = isset($_GET['max_price']) && $_GET['max_price'] != '' ? (int)$_GET['max_price'] : 999999999;
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'price_desc';
+$search = isset($_GET['search']) && $_GET['search'] != '' ? trim($_GET['search']) : '';
 
 $where = "WHERE 1=1";
 if ($pmin > 0) $where .= " AND price >= $pmin";
@@ -73,11 +101,16 @@ if ($pmax < 999999999) $where .= " AND price <= $pmax";
 if ($fm != '') $where .= " AND make = '" . mysqli_real_escape_string($conn, $fm) . "'";
 if ($ft != '') $where .= " AND type = '" . mysqli_real_escape_string($conn, $ft) . "'";
 if ($fc != '') $where .= " AND category = '" . mysqli_real_escape_string($conn, $fc) . "'";
+if ($search != '') {
+    $search_term = mysqli_real_escape_string($conn, $search);
+    $where .= " AND (make LIKE '%$search_term%' OR model LIKE '%$search_term%' OR description LIKE '%$search_term%' OR engine LIKE '%$search_term%' OR color LIKE '%$search_term%')";
+}
 
 if ($sort == 'price_asc') $order = 'price ASC';
 elseif ($sort == 'hp_desc') $order = 'horsepower DESC';
 elseif ($sort == 'name_asc') $order = 'make ASC';
 elseif ($sort == 'year_desc') $order = 'year DESC';
+elseif ($sort == 'mileage_asc') $order = 'mileage ASC';
 else $order = 'price DESC';
 
 $cars = $conn->query("SELECT * FROM cars $where ORDER BY $order");
@@ -513,6 +546,105 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             gap: 10px;
         }
         
+        /* Quick Action Buttons */
+        .quick-btn {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            width: 35px;
+            height: 35px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 1.1em;
+        }
+        .quick-btn:hover {
+            background: rgba(255,255,255,0.2);
+            transform: scale(1.1);
+        }
+        
+        /* Success Alert */
+        .success-alert {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(45deg, #00c851, #007e33);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
+            max-width: 300px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* Price Calculator */
+        .calculator-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .calc-result {
+            background: rgba(255,255,255,0.08);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .calc-monthly {
+            font-size: 2.5em;
+            color: #00c851;
+            font-weight: 700;
+        }
+        
+        /* Wishlist Counter */
+        .wishlist-counter {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #f5576c;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+        .wishlist-btn {
+            position: relative;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+        }
+        
+        /* Trade-in Form */
+        .trade-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .trade-form .full-width {
+            grid-column: span 2;
+        }
+        
         /* Footer */
         footer {
             margin-top: 60px;
@@ -538,9 +670,15 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
     <header>
         <div class="logo">🚗 Capstone Motors</div>
         <nav class="nav-links">
-            <a href="/">Inventory</a>
-            <a href="#" onclick="showContactGeneral()">Contact Us</a>
-            <a href="#" onclick="alert('About Us page coming soon!')">About</a>
+            <a href="/">🏠 Inventory</a>
+            <a href="#" onclick="showFinanceModal()">💰 Financing</a>
+            <a href="#" onclick="showTradeInModal()">🔄 Trade-In</a>
+            <button class="wishlist-btn" onclick="showWishlistModal()">
+                ❤️ Wishlist
+                <span class="wishlist-counter" id="wishlistCounter" style="display:none;">0</span>
+            </button>
+            <a href="#" onclick="showContactGeneral()">📧 Contact Us</a>
+            <a href="#" onclick="showAboutModal()">ℹ️ About</a>
         </nav>
     </header>
     
@@ -567,6 +705,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         <h3>🔍 Find Your Perfect Vehicle</h3>
         <form method="GET">
             <div class="filter-grid">
+                <input type="text" name="search" placeholder="🔍 Search make, model, color..." value="<?= htmlspecialchars($search) ?>" style="grid-column: span 2;">
                 <select name="make">
                     <option value="">All Makes</option>
                     <?php foreach ($makeList as $m): ?>
@@ -588,11 +727,12 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
                 <input type="number" name="min_price" placeholder="Min Price $" value="<?= $pmin > 0 ? $pmin : '' ?>">
                 <input type="number" name="max_price" placeholder="Max Price $" value="<?= $pmax < 999999999 ? $pmax : '' ?>">
                 <select name="sort">
-                    <option value="price_desc" <?= $sort == 'price_desc' ? 'selected' : '' ?>>Price: High to Low</option>
-                    <option value="price_asc" <?= $sort == 'price_asc' ? 'selected' : '' ?>>Price: Low to High</option>
-                    <option value="hp_desc" <?= $sort == 'hp_desc' ? 'selected' : '' ?>>Horsepower</option>
-                    <option value="year_desc" <?= $sort == 'year_desc' ? 'selected' : '' ?>>Newest First</option>
-                    <option value="name_asc" <?= $sort == 'name_asc' ? 'selected' : '' ?>>Name A-Z</option>
+                    <option value="price_desc" <?= $sort == 'price_desc' ? 'selected' : '' ?>>💰 Price: High to Low</option>
+                    <option value="price_asc" <?= $sort == 'price_asc' ? 'selected' : '' ?>>💰 Price: Low to High</option>
+                    <option value="hp_desc" <?= $sort == 'hp_desc' ? 'selected' : '' ?>>⚡ Horsepower</option>
+                    <option value="year_desc" <?= $sort == 'year_desc' ? 'selected' : '' ?>>📅 Newest First</option>
+                    <option value="name_asc" <?= $sort == 'name_asc' ? 'selected' : '' ?>>🔤 Name A-Z</option>
+                    <option value="mileage_asc" <?= $sort == 'mileage_asc' ? 'selected' : '' ?>>📏 Lowest Mileage</option>
                 </select>
                 <button type="submit" class="btn">🔍 Search</button>
             </div>
@@ -629,13 +769,63 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
                             ℹ️ Details
                         </button>
                     </div>
+                    <div class="quick-actions" style="display:flex;gap:8px;margin-top:10px;">
+                        <button class="quick-btn" onclick="event.stopPropagation(); addToWishlist(<?= $car['id'] ?>)" title="Add to Wishlist">
+                            ❤️
+                        </button>
+                        <button class="quick-btn" onclick="event.stopPropagation(); shareVehicle(<?= htmlspecialchars(json_encode($car), ENT_QUOTES, 'UTF-8') ?>)" title="Share">
+                            📤
+                        </button>
+                        <button class="quick-btn" onclick="event.stopPropagation(); calculatePayment(<?= $car['price'] ?>)" title="Calculate Payment">
+                            🧮
+                        </button>
+                    </div>
                 </div>
             </div>
         <?php endwhile; ?>
     </div>
     
     <footer>
-        <p>© 2024 Capstone Motors - Premium Automotive Excellence | Powered by AWS Cloud Infrastructure</p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 30px; margin-bottom: 30px;">
+            <div>
+                <h3 style="color: #f5576c; margin-bottom: 15px;">🚗 Capstone Motors</h3>
+                <p style="color: rgba(255,255,255,0.7); line-height: 1.6;">
+                    Your premier destination for luxury, sports, and electric vehicles. 
+                    Experience automotive excellence with our curated collection.
+                </p>
+            </div>
+            <div>
+                <h4 style="color: #f5576c; margin-bottom: 15px;">Quick Links</h4>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <a href="/" style="color: rgba(255,255,255,0.8); text-decoration: none;">🏠 Vehicle Inventory</a>
+                    <a href="#" onclick="showFinanceModal()" style="color: rgba(255,255,255,0.8); text-decoration: none;">💰 Financing Options</a>
+                    <a href="#" onclick="showTradeInModal()" style="color: rgba(255,255,255,0.8); text-decoration: none;">🔄 Trade-In Program</a>
+                    <a href="#" onclick="showAboutModal()" style="color: rgba(255,255,255,0.8); text-decoration: none;">ℹ️ About Us</a>
+                </div>
+            </div>
+            <div>
+                <h4 style="color: #f5576c; margin-bottom: 15px;">Contact Info</h4>
+                <div style="color: rgba(255,255,255,0.7); line-height: 1.8;">
+                    📍 123 Luxury Auto Blvd<br>
+                    Premium City, PC 12345<br>
+                    📞 1-800-CAPSTONE<br>
+                    ✉️ sales@capstonemotors.com
+                </div>
+            </div>
+            <div>
+                <h4 style="color: #f5576c; margin-bottom: 15px;">Business Hours</h4>
+                <div style="color: rgba(255,255,255,0.7); line-height: 1.8;">
+                    Mon-Sat: 9:00 AM - 8:00 PM<br>
+                    Sunday: 10:00 AM - 6:00 PM<br>
+                    <br>
+                    <em>Service available by appointment</em>
+                </div>
+            </div>
+        </div>
+        <hr style="border: 1px solid rgba(255,255,255,0.1); margin: 30px 0;">
+        <p style="text-align: center; color: rgba(255,255,255,0.6);">
+            © 2024 Capstone Motors - Premium Automotive Excellence | Powered by AWS Cloud Infrastructure
+        </p>
     </footer>
 </div>
 
@@ -675,11 +865,13 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         <div class="modal-body">
             <h2 class="modal-title">📞 Contact Our Sales Team</h2>
             <p id="contactCar" style="color:#f5576c; margin-bottom: 25px; font-size: 1.15em; font-weight: 500;"></p>
-            <form class="contact-form" onsubmit="submitContact(event)">
-                <input type="text" id="contactName" placeholder="Your Full Name" required>
-                <input type="email" id="contactEmail" placeholder="Email Address" required>
-                <input type="tel" id="contactPhone" placeholder="Phone Number (Optional)">
-                <textarea id="contactMessage" placeholder="Tell us about your interest in this vehicle, questions, or schedule a test drive..."></textarea>
+            <form class="contact-form" method="POST">
+                <input type="hidden" name="action" value="submit_inquiry">
+                <input type="hidden" name="car_id" id="formCarId">
+                <input type="text" name="name" id="contactName" placeholder="Your Full Name" required>
+                <input type="email" name="email" id="contactEmail" placeholder="Email Address" required>
+                <input type="tel" name="phone" id="contactPhone" placeholder="Phone Number (Optional)">
+                <textarea name="message" id="contactMessage" placeholder="Tell us about your interest in this vehicle, questions, or schedule a test drive..."></textarea>
                 <button type="submit" class="modal-btn primary">📧 Send Inquiry</button>
             </form>
             <div class="dealer-info">
@@ -691,8 +883,149 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
     </div>
 </div>
 
+<!-- Financing Modal -->
+<div id="financeModal" class="modal" onclick="if(event.target===this)closeModal('financeModal')">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('financeModal')">&times;</span>
+        <div class="modal-body">
+            <h2 class="modal-title">💰 Financing Calculator</h2>
+            <div class="calculator-grid">
+                <div>
+                    <label>Vehicle Price ($)</label>
+                    <input type="number" id="calcPrice" placeholder="Vehicle Price" value="100000">
+                </div>
+                <div>
+                    <label>Down Payment ($)</label>
+                    <input type="number" id="calcDown" placeholder="Down Payment" value="20000">
+                </div>
+                <div>
+                    <label>Interest Rate (%)</label>
+                    <input type="number" step="0.1" id="calcRate" placeholder="Interest Rate" value="4.5">
+                </div>
+                <div>
+                    <label>Loan Term (months)</label>
+                    <select id="calcTerm">
+                        <option value="36">36 months</option>
+                        <option value="48">48 months</option>
+                        <option value="60" selected>60 months</option>
+                        <option value="72">72 months</option>
+                        <option value="84">84 months</option>
+                    </select>
+                </div>
+            </div>
+            <button class="modal-btn primary" onclick="calculateMonthlyPayment()">🧮 Calculate Payment</button>
+            <div id="calcResults" class="calc-result" style="display:none;">
+                <div>Estimated Monthly Payment:</div>
+                <div class="calc-monthly" id="monthlyPayment">$0</div>
+                <p style="color: rgba(255,255,255,0.7); margin-top: 10px;">
+                    This is an estimate. Actual rates may vary based on credit score and other factors.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Trade-In Modal -->
+<div id="tradeModal" class="modal" onclick="if(event.target===this)closeModal('tradeModal')">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('tradeModal')">&times;</span>
+        <div class="modal-body">
+            <h2 class="modal-title">🔄 Trade-In Your Vehicle</h2>
+            <p style="margin-bottom: 25px; color: rgba(255,255,255,0.8);">
+                Get an instant estimate for your current vehicle's trade-in value.
+            </p>
+            <form class="trade-form">
+                <input type="text" placeholder="Year" required>
+                <input type="text" placeholder="Make" required>
+                <input type="text" placeholder="Model" required>
+                <input type="number" placeholder="Mileage" required>
+                <select required>
+                    <option value="">Condition</option>
+                    <option value="excellent">Excellent</option>
+                    <option value="good">Good</option>
+                    <option value="fair">Fair</option>
+                    <option value="poor">Poor</option>
+                </select>
+                <input type="text" placeholder="ZIP Code" required>
+                <textarea class="full-width" placeholder="Additional details about your vehicle's condition..."></textarea>
+                <button type="button" class="modal-btn primary full-width" onclick="estimateTradeValue()">
+                    💵 Get Instant Estimate
+                </button>
+            </form>
+            <div id="tradeResult" style="display:none; margin-top: 25px; text-align: center;">
+                <div style="color: #00c851; font-size: 1.8em; font-weight: 700;">
+                    Estimated Trade Value: $<span id="tradeValue">0</span>
+                </div>
+                <p style="margin-top: 10px; color: rgba(255,255,255,0.7);">
+                    Bring your vehicle for a detailed appraisal to confirm this estimate.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- About Modal -->
+<div id="aboutModal" class="modal" onclick="if(event.target===this)closeModal('aboutModal')">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('aboutModal')">&times;</span>
+        <div class="modal-body">
+            <h2 class="modal-title">ℹ️ About Capstone Motors</h2>
+            <div style="line-height: 1.8; color: rgba(255,255,255,0.8);">
+                <p style="margin-bottom: 20px;">
+                    <strong style="color: #f5576c;">Capstone Motors</strong> has been serving automotive enthusiasts for over 25 years, 
+                    specializing in premium luxury, sports, and electric vehicles from the world's most prestigious manufacturers.
+                </p>
+                
+                <h3 style="color: #f5576c; margin: 25px 0 15px 0;">🏆 Why Choose Us?</h3>
+                <ul style="margin-left: 20px;">
+                    <li>✅ Certified pre-owned vehicles with comprehensive warranties</li>
+                    <li>✅ Expert financing options with competitive rates</li>
+                    <li>✅ Full-service facility with certified technicians</li>
+                    <li>✅ White-glove delivery service available</li>
+                    <li>✅ 7-day return policy for peace of mind</li>
+                </ul>
+                
+                <h3 style="color: #f5576c; margin: 25px 0 15px 0;">📍 Visit Our Showroom</h3>
+                <p>
+                    <strong>Address:</strong> 123 Luxury Auto Blvd, Premium City, PC 12345<br>
+                    <strong>Hours:</strong> Mon-Sat 9AM-8PM, Sunday 10AM-6PM<br>
+                    <strong>Phone:</strong> 1-800-CAPSTONE<br>
+                    <strong>Email:</strong> sales@capstonemotors.com
+                </p>
+                
+                <div style="margin-top: 30px; text-align: center;">
+                    <button class="modal-btn primary" onclick="closeModal('aboutModal'); showContactGeneral();">
+                        📧 Contact Us Today
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Wishlist Modal -->
+<div id="wishlistModal" class="modal" onclick="if(event.target===this)closeModal('wishlistModal')">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('wishlistModal')">&times;</span>
+        <div class="modal-body">
+            <h2 class="modal-title">❤️ Your Wishlist</h2>
+            <div id="wishlistContent">
+                <p style="text-align: center; color: rgba(255,255,255,0.6); padding: 40px;">
+                    Your wishlist is empty. Start adding vehicles you love!
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 let currentCar = null;
+let wishlist = JSON.parse(localStorage.getItem('capstoneWishlist') || '[]');
+
+// Display success message if inquiry was submitted
+<?php if (isset($inquiry_success)): ?>
+showSuccessAlert('✅ Thank you! Your inquiry has been submitted successfully. We\'ll contact you within 24 hours.');
+<?php endif; ?>
 
 function showDetails(car) {
     currentCar = car;
@@ -719,9 +1052,11 @@ function showContact(car) {
     if (car) {
         document.getElementById('contactCar').textContent = 'Inquiring about: ' + car.year + ' ' + car.make + ' ' + car.model;
         document.getElementById('contactMessage').placeholder = 'I\'m interested in the ' + car.year + ' ' + car.make + ' ' + car.model + '. Please contact me with more information...';
+        document.getElementById('formCarId').value = car.year + ' ' + car.make + ' ' + car.model;
     } else {
         document.getElementById('contactCar').textContent = 'General Inquiry';
         document.getElementById('contactMessage').placeholder = 'How can we help you today?';
+        document.getElementById('formCarId').value = 'General';
     }
     document.getElementById('contactModal').classList.add('active');
     document.body.style.overflow = 'hidden';
@@ -732,22 +1067,116 @@ function showContactGeneral() {
     showContact(null);
 }
 
+function showFinanceModal() {
+    document.getElementById('financeModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function showTradeInModal() {
+    document.getElementById('tradeModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function showAboutModal() {
+    document.getElementById('aboutModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function showWishlistModal() {
+    updateWishlistDisplay();
+    document.getElementById('wishlistModal').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function updateWishlistDisplay() {
+    const counter = document.getElementById('wishlistCounter');
+    if (wishlist.length > 0) {
+        counter.textContent = wishlist.length;
+        counter.style.display = 'flex';
+    } else {
+        counter.style.display = 'none';
+    }
+}
+
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
     document.body.style.overflow = 'auto';
 }
 
-function submitContact(e) {
-    e.preventDefault();
-    const name = document.getElementById('contactName').value;
-    const carInfo = currentCar ? currentCar.year + ' ' + currentCar.make + ' ' + currentCar.model : 'General Inquiry';
+function calculateMonthlyPayment() {
+    const price = parseFloat(document.getElementById('calcPrice').value) || 0;
+    const down = parseFloat(document.getElementById('calcDown').value) || 0;
+    const rate = parseFloat(document.getElementById('calcRate').value) || 4.5;
+    const term = parseInt(document.getElementById('calcTerm').value) || 60;
     
-    // Show success message
-    alert('Thank you, ' + name + '! 🎉\n\nYour inquiry about ' + carInfo + ' has been received.\n\nOur sales team will contact you within 24 hours.');
+    const loanAmount = price - down;
+    const monthlyRate = rate / 100 / 12;
+    const payment = loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, term)) / (Math.pow(1 + monthlyRate, term) - 1);
     
-    // Reset form and close modal
-    document.querySelector('.contact-form').reset();
-    closeModal('contactModal');
+    document.getElementById('monthlyPayment').textContent = '$' + Math.round(payment).toLocaleString();
+    document.getElementById('calcResults').style.display = 'block';
+}
+
+function calculatePayment(price) {
+    document.getElementById('calcPrice').value = price;
+    showFinanceModal();
+}
+
+function estimateTradeValue() {
+    // Simple estimation algorithm
+    const baseValue = Math.floor(Math.random() * 40000) + 10000;
+    document.getElementById('tradeValue').textContent = baseValue.toLocaleString();
+    document.getElementById('tradeResult').style.display = 'block';
+}
+
+function addToWishlist(carId) {
+    if (!wishlist.includes(carId)) {
+        wishlist.push(carId);
+        localStorage.setItem('capstoneWishlist', JSON.stringify(wishlist));
+        showSuccessAlert('❤️ Added to your wishlist!');
+        updateWishlistDisplay();
+    } else {
+        showSuccessAlert('💝 Already in your wishlist!');
+    }
+}
+
+function removeFromWishlist(carId) {
+    wishlist = wishlist.filter(id => id !== carId);
+    localStorage.setItem('capstoneWishlist', JSON.stringify(wishlist));
+    updateWishlistDisplay();
+    updateWishlistModal();
+}
+
+function shareVehicle(car) {
+    if (navigator.share) {
+        navigator.share({
+            title: car.year + ' ' + car.make + ' ' + car.model,
+            text: 'Check out this ' + car.year + ' ' + car.make + ' ' + car.model + ' at Capstone Motors!',
+            url: window.location.href
+        });
+    } else {
+        // Fallback for browsers that don't support Web Share API
+        const shareText = 'Check out this ' + car.year + ' ' + car.make + ' ' + car.model + ' at Capstone Motors! ' + window.location.href;
+        navigator.clipboard.writeText(shareText).then(() => {
+            showSuccessAlert('📋 Link copied to clipboard!');
+        });
+    }
+}
+
+function showSuccessAlert(message) {
+    const alert = document.createElement('div');
+    alert.className = 'success-alert';
+    alert.textContent = message;
+    document.body.appendChild(alert);
+    
+    setTimeout(() => {
+        alert.style.opacity = '0';
+        setTimeout(() => {
+            if (alert.parentNode) {
+                document.body.removeChild(alert);
+            }
+        }, 300);
+    }, 3000);
 }
 
 // Close modal with Escape key
@@ -755,7 +1184,30 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeModal('detailsModal');
         closeModal('contactModal');
+        closeModal('financeModal');
+        closeModal('tradeModal');
+        closeModal('aboutModal');
+        closeModal('wishlistModal');
     }
+});
+
+// Live search functionality
+let searchTimeout;
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.querySelector('input[name="search"]');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (this.value.length > 2 || this.value.length === 0) {
+                    this.form.submit();
+                }
+            }, 500);
+        });
+    }
+    
+    // Initialize wishlist counter
+    updateWishlistDisplay();
 });
 
 // Smooth scroll for anchor links
