@@ -283,7 +283,8 @@ pipeline {
         echo "DEBUG: PLAN_VALIDATED == 'true': ${env.PLAN_VALIDATED == 'true'}"
         echo "DEBUG: ACTION == 'install': ${params.ACTION == 'install'}"
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
             echo "=========================================="
@@ -303,6 +304,7 @@ pipeline {
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
               -out=vpc-plan.tfplan
             
             echo "⏳ Applying VPC configuration..."
@@ -377,7 +379,8 @@ pipeline {
                 terraform destroy -target=module.vpc -input=false -auto-approve \
                   -var "deploy_database=${DEPLOY_DATABASE}" \
                   -var "deploy_web=${DEPLOY_WEB}" \
-                  -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "VPC cleanup failed"
+                  -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                  -var "db_master_password=${TF_DB_PASSWORD}" || echo "VPC cleanup failed"
               fi
               
               exit 1
@@ -398,7 +401,8 @@ pipeline {
       steps {
         echo '🔐 Deploying IAM Roles and Policies...'
         withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials'],
+          string(credentialsId: 'tf-db-password', variable: 'TF_DB_PASSWORD')
         ]) {
           sh '''
             echo "=========================================="
@@ -415,6 +419,7 @@ pipeline {
               -var "deploy_database=${DEPLOY_DATABASE}" \
               -var "deploy_web=${DEPLOY_WEB}" \
               -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+              -var "db_master_password=${TF_DB_PASSWORD}" \
               -out=iam-plan.tfplan
             
             echo "⏳ Applying IAM configuration..."
@@ -471,7 +476,8 @@ pipeline {
               terraform destroy -target=module.iam -input=false -auto-approve \
                 -var "deploy_database=${DEPLOY_DATABASE}" \
                 -var "deploy_web=${DEPLOY_WEB}" \
-                -var "deploy_monitoring=${DEPLOY_MONITORING}" || echo "IAM cleanup failed"
+                -var "deploy_monitoring=${DEPLOY_MONITORING}" \
+                -var "db_master_password=${TF_DB_PASSWORD}" || echo "IAM cleanup failed"
               
               exit 1
             fi
