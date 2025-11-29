@@ -277,7 +277,87 @@ Security Groups Summary:
 
 ---
 
-## Appendix B: Technology Stack
+## Appendix B: Jenkins CI/CD Pipeline for Secure Deployment
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        JENKINS CI/CD PIPELINE                                    │
+│                     (Secure Infrastructure Deployment)                           │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  STAGE 1: CHECKOUT & VALIDATION                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐       │
+│  │  Git Clone  │───►│  Terraform  │───►│  Terraform  │───►│  Security   │       │
+│  │  (GitHub)   │    │    Init     │    │   Validate  │    │   Checks    │       │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  STAGE 2: PLANNING                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │  Terraform Plan                                                          │    │
+│  │  • Uses Jenkins Credentials (aws-credentials, tf-db-password)           │    │
+│  │  • No hardcoded secrets in code                                          │    │
+│  │  • Generates execution plan for review                                   │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  STAGE 3: SEQUENTIAL SECURE DEPLOYMENT                                           │
+│                                                                                  │
+│  ┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────┐ │
+│  │  Deploy   │───►│  Deploy   │───►│  Deploy   │───►│  Deploy   │───►│Deploy │ │
+│  │   VPC     │    │   IAM     │    │ Database  │    │   Web     │    │Monitor│ │
+│  └───────────┘    └───────────┘    └───────────┘    └───────────┘    └───────┘ │
+│       │                │                │                │               │      │
+│       ▼                ▼                ▼                ▼               ▼      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  Security Features Applied at Each Stage:                                │   │
+│  │  • withCredentials[] block for AWS & DB password injection              │   │
+│  │  • Credentials never exposed in logs or console output                  │   │
+│  │  • Automatic rollback on failure (cleanup failed resources)             │   │
+│  │  • Health checks and verification before proceeding                     │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  STAGE 4: VERIFICATION & FINALIZATION                                            │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐       │
+│  │   Health    │───►│   HTTP     │───►│  Finalize   │───►│   Output    │       │
+│  │   Checks    │    │   Tests    │    │ Deployment  │    │   URLs      │       │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+Jenkins Credentials Configuration (Secure):
+┌─────────────────────────┬────────────────────────────────────────────────────────┐
+│ Credential ID           │ Purpose                                                │
+├─────────────────────────┼────────────────────────────────────────────────────────┤
+│ aws-credentials         │ AWS Access Key & Secret Key for Terraform              │
+│ tf-db-password          │ Database master password (Secret Text)                 │
+│ jenkins-github-ssh      │ GitHub SSH key for repository access                   │
+└─────────────────────────┴────────────────────────────────────────────────────────┘
+
+Pipeline Security Best Practices Implemented:
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ✓ No hardcoded passwords in Terraform variables.tf                              │
+│ ✓ Credentials injected via Jenkins withCredentials[] at runtime                 │
+│ ✓ AWS credentials use IAM role binding (not exposed in code)                    │
+│ ✓ Database password passed as -var parameter (masked in logs)                   │
+│ ✓ Automatic resource cleanup on deployment failure                              │
+│ ✓ Sequential deployment ensures dependency order                                │
+│ ✓ Health verification before marking deployment successful                      │
+│ ✓ Git repository stores only infrastructure code (no secrets)                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Appendix C: Technology Stack
 
 | Component | Technology | Version |
 |-----------|------------|---------|
