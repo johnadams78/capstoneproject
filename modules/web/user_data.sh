@@ -149,6 +149,36 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         .specs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 15px 0; font-size: .9em; color: #aaa; }
         .price { font-size: 1.5em; font-weight: bold; color: #f5576c; }
         .ri { display: flex; justify-content: space-between; margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,.05); border-radius: 10px; }
+        .card { cursor: pointer; }
+        .card-actions { display: flex; gap: 10px; margin-top: 15px; }
+        .btn-contact { background: linear-gradient(45deg, #00c851, #007e33); color: #fff; border: none; padding: 10px 15px; border-radius: 20px; cursor: pointer; font-size: .85em; display: flex; align-items: center; gap: 5px; transition: .3s; flex: 1; justify-content: center; }
+        .btn-contact:hover { transform: scale(1.05); box-shadow: 0 5px 15px rgba(0,200,81,.3); }
+        .btn-details { background: linear-gradient(45deg, #f093fb, #f5576c); color: #fff; border: none; padding: 10px 15px; border-radius: 20px; cursor: pointer; font-size: .85em; display: flex; align-items: center; gap: 5px; transition: .3s; flex: 1; justify-content: center; }
+        .btn-details:hover { transform: scale(1.05); }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.8); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal.active { display: flex; }
+        .modal-content { background: linear-gradient(135deg, #1a1a2e, #16213e); border-radius: 20px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto; position: relative; border: 1px solid rgba(255,255,255,.1); }
+        .modal-close { position: absolute; top: 15px; right: 20px; font-size: 2em; cursor: pointer; color: #fff; z-index: 10; background: rgba(0,0,0,.5); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .modal-close:hover { background: #f5576c; }
+        .modal-img { width: 100%; height: 300px; object-fit: cover; border-radius: 20px 20px 0 0; }
+        .modal-body { padding: 30px; }
+        .modal-title { font-size: 1.8em; margin-bottom: 10px; }
+        .modal-price { font-size: 2em; color: #f5576c; font-weight: bold; margin-bottom: 20px; }
+        .modal-specs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 25px; }
+        .spec-item { background: rgba(255,255,255,.1); padding: 15px; border-radius: 10px; }
+        .spec-label { font-size: .8em; color: #aaa; margin-bottom: 5px; }
+        .spec-value { font-size: 1.1em; font-weight: bold; }
+        .modal-desc { color: #ccc; line-height: 1.6; margin-bottom: 25px; padding: 20px; background: rgba(255,255,255,.05); border-radius: 10px; }
+        .modal-actions { display: flex; gap: 15px; }
+        .modal-btn { flex: 1; padding: 15px; border-radius: 25px; border: none; cursor: pointer; font-size: 1em; font-weight: bold; transition: .3s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .modal-btn.primary { background: linear-gradient(45deg, #00c851, #007e33); color: #fff; }
+        .modal-btn.secondary { background: linear-gradient(45deg, #f093fb, #f5576c); color: #fff; }
+        .modal-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,.3); }
+        .contact-modal .modal-content { max-width: 500px; }
+        .contact-form { display: flex; flex-direction: column; gap: 15px; }
+        .contact-form input, .contact-form textarea { padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: #fff; font-size: 1em; }
+        .contact-form textarea { min-height: 100px; resize: vertical; }
+        .contact-form input::placeholder, .contact-form textarea::placeholder { color: #888; }
     </style>
 </head>
 <body>
@@ -198,7 +228,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
     </div>
     <div class="cars">
         <?php while ($c = $cars->fetch_assoc()): ?>
-            <div class="card">
+            <div class="card" onclick="showDetails(<?= htmlspecialchars(json_encode($c), ENT_QUOTES, 'UTF-8') ?>)">
                 <div class="imgc">
                     <img src="<?= $c['image_url'] ?>" alt="<?= $c['make'] ?>">
                     <span class="badge"><?= $c['category'] ?></span>
@@ -212,10 +242,122 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
                         <span>📦 <?= $c['type'] ?></span>
                     </div>
                     <div class="price">$<?= number_format($c['price']) ?></div>
+                    <div class="card-actions">
+                        <button class="btn-contact" onclick="event.stopPropagation(); showContact(<?= htmlspecialchars(json_encode($c), ENT_QUOTES, 'UTF-8') ?>)">📞 Contact Dealer</button>
+                        <button class="btn-details" onclick="event.stopPropagation(); showDetails(<?= htmlspecialchars(json_encode($c), ENT_QUOTES, 'UTF-8') ?>)">ℹ️ Details</button>
+                    </div>
                 </div>
             </div>
         <?php endwhile; ?>
     </div>
+
+    <!-- Car Details Modal -->
+    <div id="detailsModal" class="modal" onclick="if(event.target===this)closeModal('detailsModal')">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('detailsModal')">&times;</span>
+            <img id="modalImg" class="modal-img" src="" alt="">
+            <div class="modal-body">
+                <h2 id="modalTitle" class="modal-title"></h2>
+                <div id="modalPrice" class="modal-price"></div>
+                <div class="modal-specs">
+                    <div class="spec-item"><div class="spec-label">Engine</div><div id="specEngine" class="spec-value"></div></div>
+                    <div class="spec-item"><div class="spec-label">Horsepower</div><div id="specHp" class="spec-value"></div></div>
+                    <div class="spec-item"><div class="spec-label">Color</div><div id="specColor" class="spec-value"></div></div>
+                    <div class="spec-item"><div class="spec-label">Body Type</div><div id="specType" class="spec-value"></div></div>
+                    <div class="spec-item"><div class="spec-label">Category</div><div id="specCategory" class="spec-value"></div></div>
+                    <div class="spec-item"><div class="spec-label">Year</div><div id="specYear" class="spec-value"></div></div>
+                </div>
+                <div class="modal-desc">
+                    <strong>About this vehicle:</strong><br><br>
+                    <span id="modalDesc"></span>
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-btn primary" onclick="closeModal('detailsModal'); showContact(currentCar)">📞 Contact Dealer</button>
+                    <button class="modal-btn secondary" onclick="closeModal('detailsModal')">✕ Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Dealer Modal -->
+    <div id="contactModal" class="modal contact-modal" onclick="if(event.target===this)closeModal('contactModal')">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('contactModal')">&times;</span>
+            <div class="modal-body">
+                <h2 class="modal-title">📞 Contact Dealer</h2>
+                <p id="contactCar" style="color:#f5576c; margin-bottom: 20px; font-size: 1.1em;"></p>
+                <form class="contact-form" onsubmit="submitContact(event)">
+                    <input type="text" placeholder="Your Name" required>
+                    <input type="email" placeholder="Your Email" required>
+                    <input type="tel" placeholder="Your Phone Number">
+                    <textarea placeholder="Message (e.g., I'm interested in this vehicle, schedule a test drive...)"></textarea>
+                    <button type="submit" class="modal-btn primary" style="margin-top: 10px;">📧 Send Inquiry</button>
+                </form>
+                <div style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,.05); border-radius: 10px; text-align: center;">
+                    <p style="color: #aaa; margin-bottom: 10px;">Or call us directly:</p>
+                    <p style="font-size: 1.3em; color: #00c851; font-weight: bold;">📞 1-800-CAPSTONE</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentCar = null;
+        
+        function showDetails(car) {
+            currentCar = car;
+            document.getElementById('modalImg').src = car.image_url;
+            document.getElementById('modalTitle').textContent = car.year + ' ' + car.make + ' ' + car.model;
+            document.getElementById('modalPrice').textContent = '$' + parseInt(car.price).toLocaleString();
+            document.getElementById('specEngine').textContent = car.engine;
+            document.getElementById('specHp').textContent = car.horsepower + ' HP';
+            document.getElementById('specColor').textContent = car.color;
+            document.getElementById('specType').textContent = car.type;
+            document.getElementById('specCategory').textContent = car.category;
+            document.getElementById('specYear').textContent = car.year;
+            
+            // Generate description based on car data
+            let desc = 'This stunning ' + car.year + ' ' + car.make + ' ' + car.model + ' features a powerful ' + car.engine + ' engine producing ' + car.horsepower + ' horsepower. ';
+            desc += 'Finished in beautiful ' + car.color + ', this ' + car.category.toLowerCase() + ' ' + car.type.toLowerCase() + ' offers an exceptional driving experience. ';
+            if (car.category === 'Luxury') {
+                desc += 'Enjoy premium comfort, cutting-edge technology, and refined elegance in every detail.';
+            } else if (car.category === 'Sports') {
+                desc += 'Experience thrilling performance, precise handling, and head-turning style on every drive.';
+            } else if (car.category === 'Electric') {
+                desc += 'Embrace the future with instant torque, zero emissions, and innovative technology.';
+            }
+            document.getElementById('modalDesc').textContent = desc;
+            
+            document.getElementById('detailsModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function showContact(car) {
+            currentCar = car;
+            document.getElementById('contactCar').textContent = 'Inquiring about: ' + car.year + ' ' + car.make + ' ' + car.model;
+            document.getElementById('contactModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+        
+        function submitContact(e) {
+            e.preventDefault();
+            alert('Thank you for your inquiry! Our team will contact you shortly about the ' + currentCar.year + ' ' + currentCar.make + ' ' + currentCar.model + '.');
+            closeModal('contactModal');
+        }
+        
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeModal('detailsModal');
+                closeModal('contactModal');
+            }
+        });
+    </script>
 </div>
 </body>
 </html>
