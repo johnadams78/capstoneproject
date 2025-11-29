@@ -9,6 +9,10 @@ resource "aws_security_group" "db_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "${var.project_name}-db-sg"
+  }
 }
 
 # Aurora Serverless v2 cluster

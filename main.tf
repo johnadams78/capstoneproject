@@ -47,6 +47,19 @@ module "web" {
   db_password = var.deploy_database ? var.db_master_password : ""
 }
 
+# Security Group Rule: Allow web tier to access database
+# This is created separately to avoid circular dependency
+resource "aws_security_group_rule" "db_from_web" {
+  count                    = var.deploy_database && var.deploy_web ? 1 : 0
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  security_group_id        = module.db[0].db_sg_id
+  source_security_group_id = module.web[0].web_sg_id
+  description              = "Allow MySQL access from web tier"
+}
+
 # Monitoring Module (Conditional)
 module "monitoring" {
   count = var.deploy_monitoring ? 1 : 0
