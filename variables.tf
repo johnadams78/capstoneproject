@@ -74,8 +74,7 @@ variable "db_master_username" {
 
 variable "db_master_password" {
   type        = string
-  description = "Master DB password (override in terraform.tfvars or Secrets Manager)"
-  default     = "ChangeMe123!"
+  description = "Master DB password (must be provided via Jenkins credential tf-db-password)"
   sensitive   = true
 }
 
