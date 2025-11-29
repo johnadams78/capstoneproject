@@ -160,6 +160,23 @@ def generate_report():
         ['Monitoring', 'EC2 (t2.nano), Grafana, monitoring SG'],
         ['IAM', 'EC2 role, instance profile (SSM access)']
     ])
+    # Architecture ASCII Diagram (Textual)
+    add_heading(doc, 'Architecture Diagram (Text)', 2)
+    add_paragraph(doc, 'A simplified textual diagram of the deployed architecture:')
+    ascii_lines = [
+        'AWS Cloud (us-east-1)',
+        '  VPC (10.0.0.0/16)',
+        '    IGW  ←→  Internet',
+        '    Public Subnets (AZ-a/b):',
+        '      ELB [ELB SG: 80/443] ←→ Auto Scaling Group (1-3 EC2 t3.micro)',
+        '        EC2 Web [Web SG: 80 from ELB; 22 admin] (Apache/PHP, app cloned from GitHub)',
+        '    Private Subnets (AZ-a/b):',
+        '      Aurora MySQL Cluster [DB SG: 3306 from Web SG]',
+        '    Monitoring:',
+        '      EC2 t2.nano (Grafana @3000, Dashboard @80) [Monitoring SG: 80/3000/22]'
+    ]
+    for line in ascii_lines:
+        add_paragraph(doc, line, indent=False)
 
     # 6. Infrastructure-as-Code (Terraform)
     add_heading(doc, '6. Infrastructure-as-Code (Terraform)', 1)
@@ -180,6 +197,15 @@ def generate_report():
         'for aws-credentials and tf-db-password; no hardcoded secrets. Rollback on failure using terraform destroy '
         'targeted to the failed module.'
     ))
+    # Jenkins Pipeline Diagram (Textual)
+    add_heading(doc, 'Jenkins CI/CD Pipeline Diagram (Text)', 2)
+    pipeline_ascii = [
+        'Checkout → Initialize → Plan → Deploy VPC → Deploy IAM → Deploy DB → Deploy Web → Deploy Monitoring → Finalize',
+        '  |         AWS creds       TF validate/plan   staged, secure                     health checks            outputs',
+        'Security at each stage: withCredentials (aws-credentials, tf-db-password); masked logs; -var db_master_password.'
+    ]
+    for line in pipeline_ascii:
+        add_paragraph(doc, line, indent=False)
 
     # 8. Security Architecture
     add_heading(doc, '8. Security Architecture', 1)
