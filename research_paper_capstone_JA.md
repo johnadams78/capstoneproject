@@ -1,7 +1,7 @@
 # Cloud-Native Three-Tier Web Application Architecture: An Infrastructure-as-Code Approach Using AWS and Terraform
 
 **Author:** John Adams  
-**Institution:** [University/College Name]  
+**Institution:** North American University
 **Course:** Capstone Project  
 **Date:** November 29, 2025
 
