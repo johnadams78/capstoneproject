@@ -140,8 +140,8 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: 'Inter', system-ui, -apple-system, sans-serif; 
-            background: linear-gradient(135deg, #a8d8f0 0%, #c9e6f5 50%, #d4eef7 100%);
-            color: #1a1a1a; 
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%); 
+            color: #fff; 
             min-height: 100vh;
             line-height: 1.6;
         }
@@ -149,7 +149,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         
         /* Header */
         header { 
-            background: rgba(255,255,255,0.6); 
+            background: rgba(255,255,255,0.08); 
             backdrop-filter: blur(20px); 
             padding: 20px 40px; 
             border-radius: 20px; 
@@ -157,7 +157,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border: 1px solid rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         .logo { 
             font-size: 1.8em; 
@@ -171,7 +171,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         }
         .nav-links { display: flex; gap: 30px; }
         .nav-links a { 
-            color: rgba(0,0,0,0.7); 
+            color: rgba(255,255,255,0.8); 
             text-decoration: none; 
             font-weight: 500;
             transition: color 0.3s;
@@ -182,7 +182,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         .hero { 
             text-align: center; 
             padding: 60px 20px;
-            background: rgba(255,255,255,0.5);
+            background: rgba(255,255,255,0.03);
             border-radius: 30px;
             margin-bottom: 30px;
         }
@@ -194,7 +194,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             -webkit-text-fill-color: transparent;
             margin-bottom: 15px;
         }
-        .hero p { color: rgba(0,0,0,0.6); font-size: 1.2em; }
+        .hero p { color: rgba(255,255,255,0.7); font-size: 1.2em; }
         .hero .stats {
             display: flex;
             justify-content: center;
@@ -210,17 +210,17 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             color: #f5576c;
         }
         .hero .stat-label {
-            color: rgba(0,0,0,0.6);
+            color: rgba(255,255,255,0.6);
             font-size: 0.9em;
         }
         
         /* Filters */
         .filters { 
-            background: rgba(255,255,255,0.6); 
+            background: rgba(255,255,255,0.08); 
             padding: 30px; 
             border-radius: 20px; 
             margin-bottom: 30px;
-            border: 1px solid rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         .filters h3 { 
             margin-bottom: 20px; 
@@ -238,18 +238,18 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
         .filter-grid select, .filter-grid input { 
             padding: 12px 15px; 
             border-radius: 12px; 
-            border: 1px solid rgba(0,0,0,0.2); 
-            background: rgba(255,255,255,0.8); 
-            color: #1a1a1a;
+            border: 1px solid rgba(255,255,255,0.2); 
+            background: rgba(255,255,255,0.1); 
+            color: #fff;
             font-size: 0.95em;
             transition: all 0.3s;
         }
         .filter-grid select:focus, .filter-grid input:focus {
             outline: none;
             border-color: #f5576c;
-            background: rgba(255,255,255,0.95);
+            background: rgba(255,255,255,0.15);
         }
-        .filter-grid select option { background: #fff; color: #1a1a1a; }
+        .filter-grid select option { background: #302b63; }
         .btn { 
             background: linear-gradient(45deg, #f093fb, #f5576c); 
             color: #fff; 
@@ -273,10 +273,10 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             align-items: center;
             margin-bottom: 25px; 
             padding: 20px 25px; 
-            background: rgba(255,255,255,0.5); 
+            background: rgba(255,255,255,0.05); 
             border-radius: 15px;
         }
-        .results-info span { color: rgba(0,0,0,0.7); }
+        .results-info span { color: rgba(255,255,255,0.8); }
         .results-info a { color: #f5576c; text-decoration: none; font-weight: 500; }
         
         /* Car Grid */
@@ -286,11 +286,11 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             gap: 30px; 
         }
         .card { 
-            background: rgba(255,255,255,0.7); 
+            background: rgba(255,255,255,0.08); 
             border-radius: 24px; 
             overflow: hidden; 
             transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-            border: 1px solid rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.1);
             cursor: pointer;
         }
         .card:hover { 
@@ -333,7 +333,6 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             font-size: 1.25em; 
             margin-bottom: 10px;
             font-weight: 600;
-            color: #1a1a1a;
         }
         .specs { 
             display: grid; 
@@ -341,7 +340,7 @@ while ($row = $r->fetch_assoc()) $catList[] = $row['category'];
             gap: 10px; 
             margin: 18px 0; 
             font-size: 0.9em; 
-            color: rgba(0,0,0,0.7);
+            color: rgba(255,255,255,0.7);
         }
         .specs span {
             display: flex;
